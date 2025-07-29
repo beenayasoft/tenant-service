@@ -13,6 +13,13 @@ class Tenant(models.Model):
     name = models.CharField('Nom de l\'entreprise', max_length=255, unique=True)
     slug = models.SlugField('Slug', max_length=255, unique=True, blank=True)
     domain = models.CharField('Domaine', max_length=255, unique=True, null=True, blank=True)
+    schema_name = models.CharField(
+        'Nom du schéma PostgreSQL',
+        max_length=63,
+        unique=True,
+        blank=True,
+        help_text='Nom du schéma PostgreSQL pour django-tenants'
+    )
     
     # Informations de contact
     email = models.EmailField('Email principal', blank=True)
@@ -28,7 +35,7 @@ class Tenant(models.Model):
     
     # Informations légales
     siret = models.CharField('SIRET', max_length=14, blank=True)
-    vat_number = models.CharField('Numéro de TVA', max_length=50, blank=True)
+    ice = models.CharField('ICE (Identifiant Commun de l\'Entreprise)', max_length=50, blank=True)
     legal_form = models.CharField('Forme juridique', max_length=100, blank=True)
     
     # Statut et gestion
@@ -83,6 +90,19 @@ class Tenant(models.Model):
                 counter += 1
             self.slug = slug
         
+        # Générer le nom du schéma si non défini
+        if not self.schema_name:
+            # Utiliser le slug pour générer un nom de schéma valide
+            from django.utils.text import slugify
+            schema_base = slugify(self.slug).replace('-', '_')
+            schema_name = f"tenant_{schema_base}"[:63]  # Limite PostgreSQL de 63 caractères
+            counter = 1
+            while Tenant.objects.filter(schema_name=schema_name).exclude(pk=self.pk).exists():
+                suffix = f"_{counter}"
+                schema_name = f"tenant_{schema_base}{suffix}"[:63]
+                counter += 1
+            self.schema_name = schema_name
+        
         # Définir la date de fin d'essai si c'est un nouveau tenant en trial
         if not self.pk and self.is_trial and not self.trial_end_date:
             from datetime import timedelta
@@ -130,7 +150,7 @@ class TenantSettings(models.Model):
     # Paramètres d'apparence
     timezone = models.CharField('Fuseau horaire', max_length=50, default='Europe/Paris')
     language = models.CharField('Langue', max_length=10, default='fr')
-    currency = models.CharField('Devise', max_length=3, default='EUR')
+    currency = models.CharField('Devise', max_length=3, default='MAD')
     date_format = models.CharField('Format de date', max_length=20, default='DD/MM/YYYY')
     
     # Paramètres visuels
@@ -251,16 +271,54 @@ class TenantDocumentAppearance(models.Model):
     """
     Configuration de l'apparence des documents par tenant
     """
+    DOCUMENT_TEMPLATE_CHOICES = (
+        ('modern', 'Moderne'),
+        ('classic', 'Classique'),
+        ('minimal', 'Minimal'),
+    )
+    
     tenant = models.OneToOneField(
         Tenant,
         on_delete=models.CASCADE,
         related_name='document_appearance'
     )
     
+    # Template et couleur principale
+    document_template = models.CharField(
+        'Modèle de document',
+        max_length=20,
+        choices=DOCUMENT_TEMPLATE_CHOICES,
+        default='modern'
+    )
+    primary_color = models.CharField(
+        'Couleur principale',
+        max_length=10,
+        default='#1B333F',
+        help_text='Couleur principale utilisée dans les documents (format HEX)'
+    )
+    
+    # Options de visibilité des éléments
+    show_logo = models.BooleanField('Afficher le logo', default=True)
+    
+    # Informations d'entreprise granulaires
+    show_company_name = models.BooleanField('Afficher le nom de l\'entreprise', default=True)
+    show_company_address = models.BooleanField('Afficher l\'adresse de l\'entreprise', default=True)
+    show_company_email = models.BooleanField('Afficher l\'email de l\'entreprise', default=True)
+    show_company_phone = models.BooleanField('Afficher le téléphone de l\'entreprise', default=True)
+    show_company_website = models.BooleanField('Afficher le site web de l\'entreprise', default=True)
+    show_company_siret = models.BooleanField('Afficher le SIRET', default=True)
+    show_company_ice = models.BooleanField('Afficher l\'ICE', default=True)
+    
+    show_client_address = models.BooleanField('Afficher l\'adresse du client', default=True)
+    show_project_info = models.BooleanField('Afficher les informations du projet', default=True)
+    show_notes = models.BooleanField('Afficher les notes', default=True)
+    show_payment_terms = models.BooleanField('Afficher les conditions de paiement', default=True)
+    show_bank_details = models.BooleanField('Afficher les coordonnées bancaires', default=True)
+    show_signature_area = models.BooleanField('Afficher la zone de signature (devis)', default=True)
+    
     # En-tête et pied de page
     header_text = models.TextField('Texte d\'en-tête', blank=True)
     footer_text = models.TextField('Texte de pied de page', blank=True)
-    show_logo = models.BooleanField('Afficher le logo', default=True)
     logo_position = models.CharField('Position du logo', max_length=10, default='left',
                                    choices=(
                                        ('left', 'Gauche'),
@@ -279,7 +337,7 @@ class TenantDocumentAppearance(models.Model):
     margin_bottom = models.IntegerField('Marge inférieure', default=25)
     margin_left = models.IntegerField('Marge gauche', default=20)
     
-    # Autres options
+    # Options héritées (compatibilité)
     show_payment_details = models.BooleanField('Afficher les détails de paiement', default=True)
     show_legal_mentions = models.BooleanField('Afficher les mentions légales', default=True)
     legal_mentions = models.TextField('Mentions légales', blank=True)
@@ -303,6 +361,7 @@ class TenantDocumentAppearance(models.Model):
 class TenantDocumentNumbering(models.Model):
     """
     Configuration de la numérotation des documents par tenant
+    Supporte les formats standards et personnalisés
     """
     DOCUMENT_TYPES = (
         ('invoice', 'Facture'),
@@ -312,19 +371,45 @@ class TenantDocumentNumbering(models.Model):
         ('credit_note', 'Avoir'),
     )
     
+    DATE_FORMAT_CHOICES = (
+        ('YYYY-MM-DD', '2024-07-23'),
+        ('YYYY-MM', '2024-07'),
+        ('YYYY', '2024'),
+        ('DD-MM-YYYY', '23-07-2024'),
+        ('MM-DD-YYYY', '07-23-2024'),
+    )
+    
     tenant = models.ForeignKey(
         Tenant,
         on_delete=models.CASCADE,
         related_name='document_numbering'
     )
     document_type = models.CharField('Type de document', max_length=20, choices=DOCUMENT_TYPES)
-    prefix = models.CharField('Préfixe', max_length=10, blank=True)
-    suffix = models.CharField('Suffixe', max_length=10, blank=True)
+    
+    # Configuration de base
+    prefix = models.CharField('Préfixe', max_length=20, blank=True, 
+                             help_text='Préfixe du numéro (ex: MEAK, CONSTRUCTION)')
+    suffix = models.CharField('Suffixe', max_length=10, blank=True,
+                             help_text='Suffixe optionnel')
     next_number = models.IntegerField('Prochain numéro', default=1)
-    padding = models.IntegerField('Nombre de chiffres', default=4,
-                                 help_text='Nombre de chiffres pour le numéro (ex: 4 pour 0001)')
+    padding = models.IntegerField('Nombre de chiffres', default=3,
+                                 help_text='Nombre de chiffres pour le numéro (ex: 3 pour 001)')
+    
+    # Configuration de date
     include_year = models.BooleanField('Inclure l\'année', default=True)
     include_month = models.BooleanField('Inclure le mois', default=False)
+    include_day = models.BooleanField('Inclure le jour', default=False)
+    date_format = models.CharField('Format de date', max_length=20, 
+                                  choices=DATE_FORMAT_CHOICES, default='YYYY-MM-DD',
+                                  help_text='Format d\'affichage de la date')
+    
+    # Configuration de formatage
+    separator = models.CharField('Séparateur', max_length=3, default='-',
+                                help_text='Caractère de séparation entre les parties')
+    custom_format = models.CharField('Format personnalisé', max_length=100, blank=True,
+                                   help_text='Format libre : {prefix}-{year}-{month}-{day}-{number}')
+    
+    # Configuration de réinitialisation
     reset_yearly = models.BooleanField('Réinitialiser chaque année', default=True)
     reset_monthly = models.BooleanField('Réinitialiser chaque mois', default=False)
     
@@ -343,36 +428,152 @@ class TenantDocumentNumbering(models.Model):
     def get_next_number(self):
         """
         Génère le prochain numéro de document selon le format configuré
+        Supporte les formats standards et personnalisés
         """
         import datetime
         now = datetime.datetime.now()
         
-        parts = []
+        # Vérifier si c'est le moment de réinitialiser le compteur
+        self._check_and_reset_counter(now)
         
-        # Ajouter le préfixe s'il existe
-        if self.prefix:
-            parts.append(self.prefix)
-            
-        # Ajouter l'année si demandé
-        if self.include_year:
-            parts.append(str(now.year))
-            
-        # Ajouter le mois si demandé
-        if self.include_month:
-            parts.append(f"{now.month:02d}")
-            
-        # Ajouter le numéro avec padding
-        parts.append(f"{self.next_number:0{self.padding}d}")
+        # Format personnalisé
+        if self.custom_format:
+            number = self._generate_custom_format(now)
+        else:
+            # Format standard amélioré
+            number = self._generate_standard_format(now)
         
-        # Ajouter le suffixe s'il existe
-        if self.suffix:
-            parts.append(self.suffix)
-            
         # Incrémenter le compteur
         self.next_number += 1
         self.save()
         
-        return "-".join(parts)
+        return number
+    
+    def preview_next_number(self):
+        """
+        Aperçu du prochain numéro sans incrémenter le compteur
+        """
+        import datetime
+        now = datetime.datetime.now()
+        
+        if self.custom_format:
+            return self._generate_custom_format(now, preview=True)
+        else:
+            return self._generate_standard_format(now, preview=True)
+    
+    def _check_and_reset_counter(self, now):
+        """
+        Vérifie si le compteur doit être réinitialisé
+        """
+        should_reset = False
+        
+        if self.reset_yearly:
+            # Réinitialiser si on change d'année
+            if self.updated_at.year != now.year:
+                should_reset = True
+        
+        if self.reset_monthly:
+            # Réinitialiser si on change de mois
+            if (self.updated_at.year != now.year or 
+                self.updated_at.month != now.month):
+                should_reset = True
+        
+        if should_reset:
+            self.next_number = 1
+    
+    def _generate_custom_format(self, now, preview=False):
+        """
+        Génère un numéro selon le format personnalisé
+        """
+        format_vars = {
+            'prefix': self.prefix or '',
+            'year': now.year,
+            'month': f"{now.month:02d}",
+            'day': f"{now.day:02d}",
+            'number': f"{self.next_number:0{self.padding}d}",
+            'suffix': self.suffix or ''
+        }
+        
+        try:
+            return self.custom_format.format(**format_vars)
+        except (KeyError, ValueError) as e:
+            # Fallback vers le format standard en cas d'erreur
+            return self._generate_standard_format(now, preview)
+    
+    def _generate_standard_format(self, now, preview=False):
+        """
+        Génère un numéro selon le format standard
+        """
+        parts = []
+        
+        # Préfixe
+        if self.prefix:
+            parts.append(self.prefix)
+        
+        # Construction de la partie date
+        date_parts = []
+        if self.include_year:
+            date_parts.append(str(now.year))
+        if self.include_month:
+            date_parts.append(f"{now.month:02d}")
+        if self.include_day:
+            date_parts.append(f"{now.day:02d}")
+        
+        if date_parts:
+            parts.append(self.separator.join(date_parts))
+        
+        # Numéro avec padding
+        parts.append(f"{self.next_number:0{self.padding}d}")
+        
+        # Suffixe
+        if self.suffix:
+            parts.append(self.suffix)
+        
+        return self.separator.join(parts)
+    
+    def increment_counter(self):
+        """
+        Incrémente le compteur manuellement (pour les appels externes)
+        """
+        self.next_number += 1
+        self.save(update_fields=['next_number', 'updated_at'])
+        return self.next_number - 1  # Retourne l'ancien numéro
+    
+    def reset_counter(self, new_value=1):
+        """
+        Remet le compteur à une valeur spécifique
+        """
+        self.next_number = new_value
+        self.save(update_fields=['next_number', 'updated_at'])
+    
+    def get_format_description(self):
+        """
+        Retourne une description du format configuré
+        """
+        if self.custom_format:
+            return f"Format personnalisé : {self.custom_format}"
+        
+        parts = []
+        if self.prefix:
+            parts.append(f"Préfixe: {self.prefix}")
+        
+        date_parts = []
+        if self.include_year:
+            date_parts.append("ANNÉE")
+        if self.include_month:
+            date_parts.append("MOIS")
+        if self.include_day:
+            date_parts.append("JOUR")
+        
+        if date_parts:
+            parts.append(f"Date: {self.separator.join(date_parts)}")
+        
+        parts.append(f"Numéro: {'0' * (self.padding - 1)}1")
+        
+        if self.suffix:
+            parts.append(f"Suffixe: {self.suffix}")
+        
+        return f"Format standard : {self.separator.join(parts)}"
 
 
 class TenantInvitation(models.Model):

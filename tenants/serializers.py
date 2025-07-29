@@ -55,6 +55,7 @@ class TenantDocumentNumberingSerializer(serializers.ModelSerializer):
 class TenantDocumentAppearanceSerializer(serializers.ModelSerializer):
     """Serializer pour l'apparence des documents"""
     logo_position_display = serializers.CharField(source='get_logo_position_display', read_only=True)
+    document_template_display = serializers.CharField(source='get_document_template_display', read_only=True)
     
     class Meta:
         model = TenantDocumentAppearance
@@ -69,7 +70,7 @@ class TenantCreateSerializer(serializers.ModelSerializer):
         fields = [
             'name', 'email', 'phone', 'website',
             'address_line_1', 'address_line_2', 'city', 'postal_code', 'country',
-            'siret', 'vat_number', 'legal_form'
+            'siret', 'ice', 'legal_form'
         ]
         extra_kwargs = {
             'name': {'required': True},
@@ -114,9 +115,9 @@ class TenantDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tenant
         fields = [
-            'id', 'name', 'slug', 'domain', 'email', 'phone', 'website',
+            'id', 'name', 'slug', 'domain', 'schema_name', 'email', 'phone', 'website',
             'address_line_1', 'address_line_2', 'city', 'postal_code', 'country',
-            'full_address', 'siret', 'vat_number', 'legal_form',
+            'full_address', 'siret', 'ice', 'legal_form',
             'is_active', 'is_trial', 'trial_end_date', 'days_left_in_trial', 'is_trial_expired',
             'subscription_plan', 'max_users', 'max_storage_gb',
             'settings', 'bank_info', 'vat_rates', 'payment_terms', 
@@ -139,7 +140,7 @@ class TenantUpdateSerializer(serializers.ModelSerializer):
         fields = [
             'name', 'domain', 'email', 'phone', 'website',
             'address_line_1', 'address_line_2', 'city', 'postal_code', 'country',
-            'siret', 'vat_number', 'legal_form', 
+            'siret', 'ice', 'legal_form', 
             'settings', 'bank_info', 'document_appearance'
         ]
     

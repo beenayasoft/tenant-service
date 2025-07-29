@@ -120,10 +120,9 @@ class TenantViewSet(viewsets.ModelViewSet):
                     
                     # Créer les nouvelles configurations
                     for numbering_data in request.data['document_numbering']:
-                        numbering_data['tenant'] = tenant.id
                         serializer = TenantDocumentNumberingSerializer(data=numbering_data)
                         if serializer.is_valid():
-                            serializer.save()
+                            serializer.save(tenant=tenant)
                         else:
                             logger.warning(f"Données de numérotation invalides: {serializer.errors}")
                 
@@ -267,8 +266,8 @@ def current_tenant_info(request):
             # Champs légaux
             if 'siret' in data:
                 tenant.siret = data['siret']
-            if 'vat_number' in data:
-                tenant.vat_number = data['vat_number']
+            if 'ice' in data:
+                tenant.ice = data['ice']
             if 'legal_form' in data:
                 tenant.legal_form = data['legal_form']
                 
@@ -287,7 +286,7 @@ def current_tenant_info(request):
                 if 'logo_url' in settings_data:
                     tenant_settings.logo_url = settings_data['logo_url']
                 if 'logo_base64' in settings_data:
-                    tenant_settings.logo_base64 = settings_data['logo_base64']
+                    tenant_settings.logo_data = settings_data['logo_base64']
                 if 'primary_color' in settings_data:
                     tenant_settings.primary_color = settings_data['primary_color']
                 if 'secondary_color' in settings_data:
@@ -358,6 +357,78 @@ def current_tenant_info(request):
                         
                 # Sauvegarder les modifications d'apparence
                 document_appearance.save()
+            
+            # Mettre à jour les taux de TVA si présents
+            if 'vat_rates' in data and isinstance(data['vat_rates'], list):
+                logger.info(f"Processing vat_rates with {len(data['vat_rates'])} items")
+                
+                # Supprimer les taux de TVA existants pour ce tenant
+                deleted_count = TenantVatRate.objects.filter(tenant=tenant).count()
+                TenantVatRate.objects.filter(tenant=tenant).delete()
+                logger.info(f"Deleted {deleted_count} existing VAT rates")
+                
+                # Créer les nouveaux taux de TVA
+                for i, vat_rate_data in enumerate(data['vat_rates']):
+                    logger.info(f"Creating VAT rate {i+1}: {vat_rate_data}")
+                    
+                    # S'assurer qu'un seul taux est défini par défaut
+                    is_default = vat_rate_data.get('is_default', False)
+                    if is_default:
+                        # Désactiver les autres taux par défaut
+                        TenantVatRate.objects.filter(tenant=tenant, is_default=True).update(is_default=False)
+                    
+                    # Créer le nouveau taux de TVA
+                    vat_rate = TenantVatRate.objects.create(
+                        tenant=tenant,
+                        code=vat_rate_data.get('code', ''),
+                        name=vat_rate_data.get('name', ''),
+                        rate=vat_rate_data.get('rate', 0),
+                        description=vat_rate_data.get('description', ''),
+                        is_default=is_default,
+                        is_active=vat_rate_data.get('is_active', True)
+                    )
+                    logger.info(f"Created VAT rate with ID: {vat_rate.id}, tenant_id: {vat_rate.tenant_id}")
+                
+                logger.info(f"Taux de TVA mis à jour pour le tenant {tenant_id}")
+            
+            # Mettre à jour la numérotation des documents si présente
+            logger.info(f"Données reçues: {data.keys()}")
+            logger.info(f"Tenant ID: {tenant_id}, Tenant object ID: {tenant.id}")
+            
+            if 'document_numbering' in data and isinstance(data['document_numbering'], list):
+                logger.info(f"Processing document_numbering with {len(data['document_numbering'])} items")
+                
+                # Supprimer les configurations existantes pour ce tenant
+                deleted_count = TenantDocumentNumbering.objects.filter(tenant=tenant).count()
+                TenantDocumentNumbering.objects.filter(tenant=tenant).delete()
+                logger.info(f"Deleted {deleted_count} existing numbering configurations")
+                
+                # Créer les nouvelles configurations
+                for i, numbering_data in enumerate(data['document_numbering']):
+                    logger.info(f"Creating numbering config {i+1}: {numbering_data}")
+                    
+                    # Créer la nouvelle configuration avec le tenant
+                    numbering = TenantDocumentNumbering.objects.create(
+                        tenant=tenant,
+                        document_type=numbering_data.get('document_type'),
+                        prefix=numbering_data.get('prefix', ''),
+                        suffix=numbering_data.get('suffix', ''),
+                        next_number=numbering_data.get('next_number', 1),
+                        padding=numbering_data.get('padding', 3),
+                        include_year=numbering_data.get('include_year', True),
+                        include_month=numbering_data.get('include_month', False),
+                        include_day=numbering_data.get('include_day', False),
+                        date_format=numbering_data.get('date_format', 'YYYY-MM-DD'),
+                        separator=numbering_data.get('separator', '-'),
+                        custom_format=numbering_data.get('custom_format', ''),
+                        reset_yearly=numbering_data.get('reset_yearly', True),
+                        reset_monthly=numbering_data.get('reset_monthly', False)
+                    )
+                    logger.info(f"Created numbering config with ID: {numbering.id}, tenant_id: {numbering.tenant_id}")
+                
+                logger.info(f"Configurations de numérotation mises à jour pour le tenant {tenant_id}")
+            else:
+                logger.info(f"No document_numbering found in data or not a list")
                 
             logger.info(f"Mise à jour réussie du tenant {tenant_id}")
             
@@ -412,7 +483,7 @@ def current_tenant_info(request):
             # Informations légales
             'legal': {
                 'siret': tenant.siret,
-                'vat_number': tenant.vat_number,
+                'ice': tenant.ice,
                 'legal_form': tenant.legal_form
             },
             
@@ -530,8 +601,16 @@ def current_tenant_info(request):
                 'next_number': numbering.next_number,
                 'include_year': numbering.include_year,
                 'include_month': numbering.include_month,
+                'include_day': numbering.include_day,
+                'date_format': numbering.date_format,
+                'separator': numbering.separator,
+                'custom_format': numbering.custom_format,
                 'reset_yearly': numbering.reset_yearly,
-                'reset_monthly': numbering.reset_monthly
+                'reset_monthly': numbering.reset_monthly,
+                'format_description': numbering.get_format_description(),
+                'preview': numbering.preview_next_number(),
+                'created_at': numbering.created_at,
+                'updated_at': numbering.updated_at
             })
         
         # Ajouter l'apparence des documents
@@ -563,6 +642,654 @@ def current_tenant_info(request):
             status=status.HTTP_404_NOT_FOUND
         )
 
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def preview_document_number(request):
+    """
+    Aperçu de numérotation sans sauvegarder
+    POST /api/tenants/preview-numbering/
+    """
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response({'error': 'X-Tenant-ID header requis'}, status=400)
+    
+    try:
+        # Créer un objet temporaire pour l'aperçu
+        temp_numbering = TenantDocumentNumbering(
+            document_type=request.data.get('document_type', 'quote'),
+            prefix=request.data.get('prefix', ''),
+            suffix=request.data.get('suffix', ''),
+            next_number=request.data.get('next_number', 1),
+            padding=request.data.get('padding', 3),
+            include_year=request.data.get('include_year', True),
+            include_month=request.data.get('include_month', False),
+            include_day=request.data.get('include_day', False),
+            date_format=request.data.get('date_format', 'YYYY-MM-DD'),
+            separator=request.data.get('separator', '-'),
+            custom_format=request.data.get('custom_format', ''),
+            reset_yearly=request.data.get('reset_yearly', True),
+            reset_monthly=request.data.get('reset_monthly', False)
+        )
+        
+        preview = temp_numbering.preview_next_number()
+        format_description = temp_numbering.get_format_description()
+        
+        return Response({
+            'preview': preview,
+            'format_description': format_description,
+            'config': request.data
+        })
+        
+    except Exception as e:
+        return Response({'error': str(e)}, status=400)
+
+
+@api_view(['PATCH'])
+@permission_classes([permissions.AllowAny])
+def increment_document_counter(request, numbering_id):
+    """
+    Incrémente le compteur d'un document numbering
+    PATCH /api/tenants/document_numbering/{id}/increment/
+    """
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response({'error': 'X-Tenant-ID header requis'}, status=400)
+    
+    try:
+        numbering = TenantDocumentNumbering.objects.get(
+            id=numbering_id,
+            tenant_id=tenant_id
+        )
+        
+        old_counter = numbering.increment_counter()
+        
+        return Response({
+            'old_counter': old_counter,
+            'new_counter': numbering.next_number,
+            'message': 'Compteur incrémenté avec succès'
+        })
+        
+    except TenantDocumentNumbering.DoesNotExist:
+        return Response(
+            {'error': 'Configuration de numérotation non trouvée'}, 
+            status=404
+        )
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def reset_document_counter(request, numbering_id):
+    """
+    Remet à zéro le compteur d'un document numbering
+    POST /api/tenants/document_numbering/{id}/reset/
+    """
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response({'error': 'X-Tenant-ID header requis'}, status=400)
+    
+    try:
+        numbering = TenantDocumentNumbering.objects.get(
+            id=numbering_id,
+            tenant_id=tenant_id
+        )
+        
+        new_value = request.data.get('new_value', 1)
+        if not isinstance(new_value, int) or new_value < 1:
+            return Response({'error': 'new_value doit être un entier >= 1'}, status=400)
+        
+        numbering.reset_counter(new_value)
+        
+        return Response({
+            'new_counter': numbering.next_number,
+            'message': f'Compteur remis à {new_value}'
+        })
+        
+    except TenantDocumentNumbering.DoesNotExist:
+        return Response(
+            {'error': 'Configuration de numérotation non trouvée'}, 
+            status=404
+        )
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def get_document_numbering_config(request, document_type):
+    """
+    Récupère la configuration de numérotation pour un type de document
+    GET /api/tenants/document_numbering/{document_type}/
+    """
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response({'error': 'X-Tenant-ID header requis'}, status=400)
+    
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        
+        try:
+            numbering = TenantDocumentNumbering.objects.get(
+                tenant=tenant,
+                document_type=document_type
+            )
+            
+            # Sérialiser la configuration
+            config_data = {
+                'id': str(numbering.id),
+                'document_type': numbering.document_type,
+                'document_type_display': numbering.get_document_type_display(),
+                'prefix': numbering.prefix,
+                'suffix': numbering.suffix,
+                'next_number': numbering.next_number,
+                'padding': numbering.padding,
+                'include_year': numbering.include_year,
+                'include_month': numbering.include_month,
+                'include_day': numbering.include_day,
+                'date_format': numbering.date_format,
+                'separator': numbering.separator,
+                'custom_format': numbering.custom_format,
+                'reset_yearly': numbering.reset_yearly,
+                'reset_monthly': numbering.reset_monthly,
+                'format_description': numbering.get_format_description(),
+                'preview': numbering.preview_next_number(),
+                'created_at': numbering.created_at,
+                'updated_at': numbering.updated_at
+            }
+            
+            return Response(config_data)
+            
+        except TenantDocumentNumbering.DoesNotExist:
+            # Créer une configuration par défaut
+            defaults = {
+                'quote': {'prefix': 'DEV', 'padding': 3},
+                'invoice': {'prefix': 'FAC', 'padding': 3},
+                'credit_note': {'prefix': 'AV', 'padding': 3}
+            }
+            
+            config = defaults.get(document_type, {'prefix': 'DOC', 'padding': 3})
+            
+            numbering = TenantDocumentNumbering.objects.create(
+                tenant=tenant,
+                document_type=document_type,
+                **config,
+                include_year=True,
+                include_month=False,
+                include_day=False,
+                separator='-'
+            )
+            
+            config_data = {
+                'id': str(numbering.id),
+                'document_type': numbering.document_type,
+                'document_type_display': numbering.get_document_type_display(),
+                'prefix': numbering.prefix,
+                'suffix': numbering.suffix,
+                'next_number': numbering.next_number,
+                'padding': numbering.padding,
+                'include_year': numbering.include_year,
+                'include_month': numbering.include_month,
+                'include_day': numbering.include_day,
+                'date_format': numbering.date_format,
+                'separator': numbering.separator,
+                'custom_format': numbering.custom_format,
+                'reset_yearly': numbering.reset_yearly,
+                'reset_monthly': numbering.reset_monthly,
+                'format_description': numbering.get_format_description(),
+                'preview': numbering.preview_next_number(),
+                'created_at': numbering.created_at,
+                'updated_at': numbering.updated_at
+            }
+            
+            return Response(config_data, status=201)
+        
+    except Tenant.DoesNotExist:
+        return Response(
+            {'error': f'Tenant {tenant_id} non trouvé'}, 
+            status=404
+        )
+    except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([permissions.AllowAny])
+def tenant_vat_rates(request):
+    """
+    Endpoint spécifique pour gérer les taux de TVA d'un tenant
+    GET: Récupérer les taux de TVA
+    POST: Créer un nouveau taux de TVA
+    PUT/PATCH: Mettre à jour les taux de TVA existants
+    DELETE: Supprimer un taux de TVA
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Log détaillé pour le débogage
+    logger.info(f"Appel à tenant_vat_rates - Méthode: {request.method} - Headers: {request.headers}")
+    logger.info(f"Appel à tenant_vat_rates - URL: {request.path}")
+    if request.body:
+        logger.info(f"Contenu de la requête: {request.body.decode('utf-8')}")
+    
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response(
+            {"detail": "X-Tenant-ID header is required"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        
+        # GET: Récupérer les taux de TVA
+        if request.method == 'GET':
+            vat_rates = tenant.vat_rates.all()
+            response_data = []
+            
+            for vat_rate in vat_rates:
+                response_data.append({
+                    'id': str(vat_rate.id),
+                    'code': vat_rate.code,
+                    'name': vat_rate.name,
+                    'rate': vat_rate.rate,
+                    'rate_display': f"{vat_rate.rate}%",
+                    'description': vat_rate.description,
+                    'is_default': vat_rate.is_default,
+                    'is_active': vat_rate.is_active
+                })
+            
+            return Response(response_data)
+        
+        # POST: Créer un nouveau taux de TVA
+        elif request.method == 'POST':
+            data = request.data
+            
+            # Vérifier si un taux avec le même code existe déjà
+            if TenantVatRate.objects.filter(tenant=tenant, code=data.get('code', '')).exists():
+                return Response(
+                    {"detail": f"Un taux de TVA avec le code {data.get('code', '')} existe déjà"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Créer le nouveau taux de TVA
+            is_default = data.get('is_default', False)
+            if is_default:
+                # Désactiver les autres taux par défaut
+                TenantVatRate.objects.filter(tenant=tenant, is_default=True).update(is_default=False)
+            
+            vat_rate = TenantVatRate.objects.create(
+                tenant=tenant,
+                code=data.get('code', ''),
+                name=data.get('name', ''),
+                rate=data.get('rate', 0),
+                description=data.get('description', ''),
+                is_default=is_default,
+                is_active=data.get('is_active', True)
+            )
+            
+            return Response({
+                'id': str(vat_rate.id),
+                'code': vat_rate.code,
+                'name': vat_rate.name,
+                'rate': vat_rate.rate,
+                'rate_display': f"{vat_rate.rate}%",
+                'description': vat_rate.description,
+                'is_default': vat_rate.is_default,
+                'is_active': vat_rate.is_active
+            }, status=status.HTTP_201_CREATED)
+        
+        # PUT/PATCH: Mettre à jour les taux de TVA
+        elif request.method in ['PUT', 'PATCH']:
+            data = request.data
+            
+            # Si on reçoit une liste de taux de TVA
+            if isinstance(data, list):
+                # Supprimer tous les taux existants
+                TenantVatRate.objects.filter(tenant=tenant).delete()
+                
+                # Créer les nouveaux taux
+                created_rates = []
+                for rate_data in data:
+                    is_default = rate_data.get('is_default', False)
+                    if is_default and created_rates:
+                        # Désactiver les autres taux par défaut
+                        for rate in created_rates:
+                            if rate.is_default:
+                                rate.is_default = False
+                                rate.save()
+                    
+                    vat_rate = TenantVatRate.objects.create(
+                        tenant=tenant,
+                        code=rate_data.get('code', ''),
+                        name=rate_data.get('name', ''),
+                        rate=rate_data.get('rate', 0),
+                        description=rate_data.get('description', ''),
+                        is_default=is_default,
+                        is_active=rate_data.get('is_active', True)
+                    )
+                    created_rates.append(vat_rate)
+                
+                # Préparer la réponse
+                response_data = []
+                for rate in created_rates:
+                    response_data.append({
+                        'id': str(rate.id),
+                        'code': rate.code,
+                        'name': rate.name,
+                        'rate': rate.rate,
+                        'rate_display': f"{rate.rate}%",
+                        'description': rate.description,
+                        'is_default': rate.is_default,
+                        'is_active': rate.is_active
+                    })
+                
+                return Response(response_data)
+            
+            # Si on reçoit un seul taux de TVA
+            else:
+                rate_id = data.get('id')
+                if not rate_id:
+                    return Response(
+                        {"detail": "ID du taux de TVA manquant"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                try:
+                    vat_rate = TenantVatRate.objects.get(tenant=tenant, id=rate_id)
+                    
+                    # Mettre à jour les champs
+                    if 'code' in data:
+                        vat_rate.code = data['code']
+                    if 'name' in data:
+                        vat_rate.name = data['name']
+                    if 'rate' in data:
+                        vat_rate.rate = data['rate']
+                    if 'description' in data:
+                        vat_rate.description = data['description']
+                    if 'is_active' in data:
+                        vat_rate.is_active = data['is_active']
+                    
+                    # Gérer le champ is_default
+                    if 'is_default' in data and data['is_default'] and not vat_rate.is_default:
+                        # Désactiver les autres taux par défaut
+                        TenantVatRate.objects.filter(tenant=tenant, is_default=True).update(is_default=False)
+                        vat_rate.is_default = True
+                    
+                    vat_rate.save()
+                    
+                    return Response({
+                        'id': str(vat_rate.id),
+                        'code': vat_rate.code,
+                        'name': vat_rate.name,
+                        'rate': vat_rate.rate,
+                        'rate_display': f"{vat_rate.rate}%",
+                        'description': vat_rate.description,
+                        'is_default': vat_rate.is_default,
+                        'is_active': vat_rate.is_active
+                    })
+                except TenantVatRate.DoesNotExist:
+                    return Response(
+                        {"detail": f"Taux de TVA avec ID {rate_id} non trouvé"}, 
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+        
+        # DELETE: Supprimer un taux de TVA
+        elif request.method == 'DELETE':
+            rate_id = request.query_params.get('id')
+            if not rate_id:
+                return Response(
+                    {"detail": "ID du taux de TVA manquant"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            try:
+                vat_rate = TenantVatRate.objects.get(tenant=tenant, id=rate_id)
+                
+                # Empêcher la suppression du taux par défaut s'il n'y a pas d'autre taux
+                if vat_rate.is_default and TenantVatRate.objects.filter(tenant=tenant).count() > 1:
+                    # Trouver un autre taux à définir comme défaut
+                    other_rate = TenantVatRate.objects.filter(tenant=tenant).exclude(id=rate_id).first()
+                    if other_rate:
+                        other_rate.is_default = True
+                        other_rate.save()
+                
+                vat_rate.delete()
+                return Response(status=status.HTTP_204_NO_CONTENT)
+            except TenantVatRate.DoesNotExist:
+                return Response(
+                    {"detail": f"Taux de TVA avec ID {rate_id} non trouvé"}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        return Response({"detail": "Méthode non autorisée"}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+    
+    except Tenant.DoesNotExist:
+        return Response(
+            {"detail": f"Tenant avec ID {tenant_id} non trouvé"}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Erreur lors de la gestion des taux de TVA: {str(e)}")
+        return Response(
+            {"detail": f"Une erreur est survenue: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+@permission_classes([permissions.AllowAny])
+def tenant_payment_terms(request):
+    """
+    Endpoint spécifique pour gérer les conditions de paiement d'un tenant
+    GET: Récupérer les conditions de paiement
+    POST: Créer une nouvelle condition de paiement
+    PUT/PATCH: Mettre à jour les conditions de paiement existantes
+    DELETE: Supprimer une condition de paiement
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Log détaillé pour le débogage
+    logger.info(f"Appel à tenant_payment_terms - Méthode: {request.method} - Headers: {request.headers}")
+    logger.info(f"Appel à tenant_payment_terms - URL: {request.path}")
+    if request.body:
+        logger.info(f"Contenu de la requête: {request.body.decode('utf-8')}")
+    
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response(
+            {"detail": "X-Tenant-ID header is required"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        
+        # GET: Récupérer les conditions de paiement
+        if request.method == 'GET':
+            payment_terms = tenant.payment_terms.all()
+            response_data = []
+            
+            for term in payment_terms:
+                response_data.append({
+                    'id': str(term.id),
+                    'label': term.label,
+                    'days': term.days,
+                    'description': term.description,
+                    'is_default': term.is_default,
+                    'is_active': term.is_active
+                })
+            
+            return Response(response_data)
+        
+        # POST: Créer une nouvelle condition de paiement
+        elif request.method == 'POST':
+            data = request.data
+            
+            # Vérifier si une condition avec le même libellé existe déjà
+            if TenantPaymentTerm.objects.filter(tenant=tenant, label=data.get('label', '')).exists():
+                return Response(
+                    {"detail": f"Une condition de paiement avec le libellé {data.get('label', '')} existe déjà"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Créer la nouvelle condition de paiement
+            is_default = data.get('is_default', False)
+            if is_default:
+                # Désactiver les autres conditions par défaut
+                TenantPaymentTerm.objects.filter(tenant=tenant, is_default=True).update(is_default=False)
+            
+            payment_term = TenantPaymentTerm.objects.create(
+                tenant=tenant,
+                label=data.get('label', ''),
+                days=data.get('days', 0),
+                description=data.get('description', ''),
+                is_default=is_default,
+                is_active=data.get('is_active', True)
+            )
+            
+            return Response({
+                'id': str(payment_term.id),
+                'label': payment_term.label,
+                'days': payment_term.days,
+                'description': payment_term.description,
+                'is_default': payment_term.is_default,
+                'is_active': payment_term.is_active
+            }, status=status.HTTP_201_CREATED)
+        
+        # PUT/PATCH: Mettre à jour les conditions de paiement
+        elif request.method in ['PUT', 'PATCH']:
+            data = request.data
+            
+            # Si on reçoit une liste de conditions de paiement
+            if isinstance(data, list):
+                # Supprimer toutes les conditions existantes
+                TenantPaymentTerm.objects.filter(tenant=tenant).delete()
+                
+                # Créer les nouvelles conditions
+                created_terms = []
+                for term_data in data:
+                    is_default = term_data.get('is_default', False)
+                    if is_default and created_terms:
+                        # Désactiver les autres conditions par défaut
+                        for term in created_terms:
+                            if term.is_default:
+                                term.is_default = False
+                                term.save()
+                    
+                    payment_term = TenantPaymentTerm.objects.create(
+                        tenant=tenant,
+                        label=term_data.get('label', ''),
+                        days=term_data.get('days', 0),
+                        description=term_data.get('description', ''),
+                        is_default=is_default,
+                        is_active=term_data.get('is_active', True)
+                    )
+                    created_terms.append(payment_term)
+                
+                # Préparer la réponse
+                response_data = []
+                for term in created_terms:
+                    response_data.append({
+                        'id': str(term.id),
+                        'label': term.label,
+                        'days': term.days,
+                        'description': term.description,
+                        'is_default': term.is_default,
+                        'is_active': term.is_active
+                    })
+                
+                return Response(response_data)
+            
+            # Si on reçoit une seule condition de paiement
+            else:
+                term_id = data.get('id')
+                if not term_id:
+                    return Response(
+                        {"detail": "ID de la condition de paiement manquant"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                try:
+                    payment_term = TenantPaymentTerm.objects.get(tenant=tenant, id=term_id)
+                    
+                    # Mettre à jour les champs
+                    if 'label' in data:
+                        payment_term.label = data['label']
+                    if 'days' in data:
+                        payment_term.days = data['days']
+                    if 'description' in data:
+                        payment_term.description = data['description']
+                    if 'is_active' in data:
+                        payment_term.is_active = data['is_active']
+                    
+                    # Gérer le champ is_default
+                    if 'is_default' in data and data['is_default'] and not payment_term.is_default:
+                        # Désactiver les autres conditions par défaut
+                        TenantPaymentTerm.objects.filter(tenant=tenant, is_default=True).update(is_default=False)
+                        payment_term.is_default = True
+                    
+                    payment_term.save()
+                    
+                    return Response({
+                        'id': str(payment_term.id),
+                        'label': payment_term.label,
+                        'days': payment_term.days,
+                        'description': payment_term.description,
+                        'is_default': payment_term.is_default,
+                        'is_active': payment_term.is_active
+                    })
+                except TenantPaymentTerm.DoesNotExist:
+                    return Response(
+                        {"detail": f"Condition de paiement avec ID {term_id} non trouvée"}, 
+                        status=status.HTTP_404_NOT_FOUND
+                    )
+        
+        # DELETE: Supprimer une condition de paiement
+        elif request.method == 'DELETE':
+            term_id = request.query_params.get('id')
+            if not term_id:
+                return Response(
+                    {"detail": "ID de la condition de paiement manquant"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            try:
+                payment_term = TenantPaymentTerm.objects.get(tenant=tenant, id=term_id)
+                
+                # Empêcher la suppression de la condition par défaut s'il n'y a pas d'autre condition
+                if payment_term.is_default and TenantPaymentTerm.objects.filter(tenant=tenant).count() > 1:
+                    # Trouver une autre condition à définir comme défaut
+                    other_term = TenantPaymentTerm.objects.filter(tenant=tenant).exclude(id=term_id).first()
+                    if other_term:
+                        other_term.is_default = True
+                        other_term.save()
+                
+                payment_term.delete()
+                return Response(status=status.HTTP_204_NO_CONTENT)
+                
+            except TenantPaymentTerm.DoesNotExist:
+                return Response(
+                    {"detail": f"Condition de paiement avec ID {term_id} non trouvée"}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+        
+        return Response({"detail": "Méthode non autorisée"}, status=status.HTTP_405_METHOD_NOT_ALLOWED)
+        
+    except Tenant.DoesNotExist:
+        return Response(
+            {"detail": f"Tenant with id {tenant_id} not found"}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement des conditions de paiement: {str(e)}")
+        return Response(
+            {"detail": f"Une erreur est survenue: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
 @api_view(['GET'])
 @permission_classes([permissions.AllowAny])
 def health_check(request):
@@ -570,5 +1297,5 @@ def health_check(request):
     return Response({
         "service": "tenant-service",
         "status": "healthy",
-        "version": "1.0.0"
+        "version": "2.0.0"
     })
