@@ -4,11 +4,16 @@ from .views import (
     TenantViewSet, validate_tenant, health_check, current_tenant_info,
     preview_document_number, increment_document_counter, 
     reset_document_counter, get_document_numbering_config,
-    tenant_vat_rates, tenant_payment_terms
+    manage_document_numbering_config, tenant_vat_rates, tenant_payment_terms
 )
 from .views_document_appearance import (
     tenant_document_appearance, document_appearance_defaults,
-    document_template_choices, document_template_presets, color_presets
+    document_template_choices, document_template_presets, color_presets,
+    logo_position_choices, table_style_choices
+)
+from .views_payment_methods import (
+    tenant_payment_methods, tenant_payment_method_detail,
+    payment_method_types, create_default_payment_methods
 )
 
 app_name = 'tenants'
@@ -18,10 +23,7 @@ router = DefaultRouter()
 router.register(r'tenants', TenantViewSet, basename='tenant')
 
 urlpatterns = [
-    # Routes du router (CRUD des tenants)
-    path('', include(router.urls)),
-    
-    # Endpoints spéciaux pour les autres services
+    # Endpoints spéciaux pour les autres services (AVANT le router)
     path('tenants/<uuid:tenant_id>/validate/', validate_tenant, name='validate_tenant'),
     path('tenants/current_tenant_info/', current_tenant_info, name='current_tenant_info'),
     
@@ -37,9 +39,10 @@ urlpatterns = [
     
     # Endpoints pour la numérotation des documents
     path('tenants/preview-numbering/', preview_document_number, name='preview_document_number'),
+    path('tenants/document_numbering/<int:numbering_id>/increment/', increment_document_counter, name='increment_document_counter'),
+    path('tenants/document_numbering/<int:numbering_id>/reset/', reset_document_counter, name='reset_document_counter'),
     path('tenants/document_numbering/<str:document_type>/', get_document_numbering_config, name='get_document_numbering_config'),
-    path('tenants/document_numbering/<uuid:numbering_id>/increment/', increment_document_counter, name='increment_document_counter'),
-    path('tenants/document_numbering/<uuid:numbering_id>/reset/', reset_document_counter, name='reset_document_counter'),
+    path('tenants/document_numbering/', manage_document_numbering_config, name='manage_document_numbering_config'),
     
     # Endpoints pour l'apparence des documents
     path('tenants/document_appearance/', tenant_document_appearance, name='tenant_document_appearance'),
@@ -48,7 +51,18 @@ urlpatterns = [
     path('document_appearance/templates/', document_template_choices, name='document_template_choices'),
     path('document_appearance/presets/', document_template_presets, name='document_template_presets'),
     path('document_appearance/colors/', color_presets, name='color_presets'),
+    path('document_appearance/logo_positions/', logo_position_choices, name='logo_position_choices'),
+    path('document_appearance/table_styles/', table_style_choices, name='table_style_choices'),
+    
+    # Endpoints pour les moyens de paiement
+    path('payment_methods/', tenant_payment_methods, name='tenant_payment_methods'),
+    path('payment_methods/<int:payment_method_id>/', tenant_payment_method_detail, name='tenant_payment_method_detail'),
+    path('payment_methods/types/', payment_method_types, name='payment_method_types'),
+    path('payment_methods/create_defaults/', create_default_payment_methods, name='create_default_payment_methods'),
     
     # Endpoint de santé
     path('health/', health_check, name='health_check'),
+    
+    # Routes du router (CRUD des tenants) - APRÈS les endpoints spécialisés
+    path('', include(router.urls)),
 ]
