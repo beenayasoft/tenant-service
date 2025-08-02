@@ -11,6 +11,7 @@ class Tenant(models.Model):
     # Identifiants
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField('Nom de l\'entreprise', max_length=255, unique=True)
+    slogan = models.CharField('Slogan/description de l\'entreprise', max_length=255, blank=True)
     slug = models.SlugField('Slug', max_length=255, unique=True, blank=True)
     domain = models.CharField('Domaine', max_length=255, unique=True, null=True, blank=True)
     schema_name = models.CharField(
@@ -300,8 +301,29 @@ class TenantDocumentAppearance(models.Model):
     # Options de visibilité des éléments
     show_logo = models.BooleanField('Afficher le logo', default=True)
     
+    # Configuration avancée du logo
+    logo_data = models.TextField('Données du logo (base64)', blank=True, help_text='Logo encodé en base64')
+    logo_size = models.IntegerField('Taille du logo (%)', default=100, help_text='Taille du logo en pourcentage (50-200%)')
+    logo_position_type = models.CharField(
+        'Type de position du logo',
+        max_length=10,
+        choices=(
+            ('left', 'À gauche'),
+            ('top', 'En haut'),
+            ('header', 'Dans l\'en-tête')
+        ),
+        default='left',
+        help_text='Position principale du logo dans le document'
+    )
+    logo_center_in_header = models.BooleanField(
+        'Centrer le logo dans l\'en-tête',
+        default=False,
+        help_text='Centrer le logo quand il est placé dans l\'en-tête'
+    )
+    
     # Informations d'entreprise granulaires
     show_company_name = models.BooleanField('Afficher le nom de l\'entreprise', default=True)
+    show_company_slogan = models.BooleanField('Afficher le slogan/description de l\'entreprise', default=True)
     show_company_address = models.BooleanField('Afficher l\'adresse de l\'entreprise', default=True)
     show_company_email = models.BooleanField('Afficher l\'email de l\'entreprise', default=True)
     show_company_phone = models.BooleanField('Afficher le téléphone de l\'entreprise', default=True)
@@ -346,6 +368,104 @@ class TenantDocumentAppearance(models.Model):
     table_header_color = models.CharField('Couleur en-tête tableau', max_length=10, default='#f8f9fa')
     table_alternate_color = models.CharField('Couleur alternée tableau', max_length=10, default='#f2f2f2')
     
+    # Styles de tableaux avancés
+    table_border_style = models.CharField(
+        'Style des bordures',
+        max_length=20,
+        choices=(
+            ('straight', 'Droites'),
+            ('rounded', 'Arrondies')
+        ),
+        default='straight',
+        help_text='Style des bordures des cellules du tableau'
+    )
+    table_border_horizontal = models.BooleanField(
+        'Bordures horizontales',
+        default=True,
+        help_text='Afficher les bordures horizontales entre les lignes'
+    )
+    table_border_vertical = models.BooleanField(
+        'Bordures verticales',
+        default=True,
+        help_text='Afficher les bordures verticales entre les colonnes'
+    )
+    table_border_width = models.IntegerField(
+        'Épaisseur des bordures (px)',
+        default=1,
+        help_text='Épaisseur des bordures en pixels'
+    )
+    table_border_color = models.CharField(
+        'Couleur des bordures',
+        max_length=10,
+        default='#dee2e6',
+        help_text='Couleur des bordures du tableau'
+    )
+    
+    # Sections contrastées
+    section_contrast = models.BooleanField(
+        'Sections contrastées',
+        default=False,
+        help_text='Alterner les couleurs de fond des sections/chapitres'
+    )
+    section_contrast_color = models.CharField(
+        'Couleur de contraste des sections',
+        max_length=10,
+        default='#f8f9fa',
+        help_text='Couleur de fond pour les sections alternées'
+    )
+    show_section_subtotals = models.BooleanField(
+        'Afficher les sous-totaux des sections',
+        default=True,
+        help_text='Afficher les sous-totaux dans les titres des sections/chapitres'
+    )
+    
+    # Espacement et mise en forme avancée
+    table_row_padding = models.IntegerField(
+        'Espacement des lignes (px)',
+        default=8,
+        help_text='Espacement vertical à l\'intérieur des cellules'
+    )
+    table_column_spacing = models.IntegerField(
+        'Espacement des colonnes (px)',
+        default=12,
+        help_text='Espacement horizontal entre les colonnes'
+    )
+    
+    # Configuration des moyens de paiement
+    show_payment_methods = models.BooleanField(
+        'Afficher les moyens de paiement',
+        default=True,
+        help_text='Afficher la section des moyens de paiement dans les documents'
+    )
+    payment_methods_title = models.CharField(
+        'Titre de la section moyens de paiement',
+        max_length=100,
+        default='Moyens de paiement',
+        help_text='Titre affiché au-dessus des moyens de paiement'
+    )
+    payment_methods_layout = models.CharField(
+        'Disposition des moyens de paiement',
+        max_length=20,
+        choices=(
+            ('horizontal', 'Horizontal (côte à côte)'),
+            ('vertical', 'Vertical (empilés)'),
+            ('grid', 'Grille (2 colonnes)')
+        ),
+        default='horizontal',
+        help_text='Comment disposer les cartes de moyens de paiement'
+    )
+    payment_methods_style = models.CharField(
+        'Style des cartes de paiement',
+        max_length=20,
+        choices=(
+            ('modern', 'Moderne (avec ombres)'),
+            ('classic', 'Classique (bordures simples)'),
+            ('minimal', 'Minimal (sans bordures)')
+        ),
+        default='modern',
+        help_text='Style visuel des cartes de moyens de paiement'
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -356,6 +476,123 @@ class TenantDocumentAppearance(models.Model):
     
     def __str__(self):
         return f"Apparence des documents - {self.tenant.name}"
+
+
+class TenantPaymentMethod(models.Model):
+    """
+    Moyens de paiement personnalisés par tenant
+    Permet de configurer les moyens de paiement affichés dans les documents
+    """
+    PAYMENT_METHOD_TYPES = (
+        ('bank_transfer', 'Virement bancaire'),
+        ('check', 'Chèque'),
+        ('cash', 'Espèces'),
+        ('card', 'Carte bancaire'),
+        ('paypal', 'PayPal'),
+        ('other', 'Autre'),
+    )
+    
+    tenant = models.ForeignKey(
+        Tenant,
+        on_delete=models.CASCADE,
+        related_name='payment_methods'
+    )
+    method_type = models.CharField(
+        'Type de moyen de paiement',
+        max_length=50,
+        choices=PAYMENT_METHOD_TYPES
+    )
+    label = models.CharField(
+        'Libellé',
+        max_length=100,
+        help_text='Nom affiché du moyen de paiement'
+    )
+    description = models.TextField(
+        'Description',
+        blank=True,
+        help_text='Description ou instructions pour ce moyen de paiement'
+    )
+    
+    # Détails spécifiques selon le type
+    details = models.JSONField(
+        'Détails spécifiques',
+        default=dict,
+        blank=True,
+        help_text='Détails spécifiques (IBAN, RIB, instructions, etc.)'
+    )
+    
+    # Configuration d'affichage
+    is_active = models.BooleanField(
+        'Actif',
+        default=True,
+        help_text='Afficher ce moyen de paiement dans les documents'
+    )
+    display_order = models.IntegerField(
+        'Ordre d\'affichage',
+        default=0,
+        help_text='Ordre d\'affichage dans la liste (0 = premier)'
+    )
+    
+    # Style visuel
+    icon_name = models.CharField(
+        'Nom de l\'icône',
+        max_length=50,
+        blank=True,
+        help_text='Nom de l\'icône à afficher (ex: bank, credit-card)'
+    )
+    background_color = models.CharField(
+        'Couleur de fond',
+        max_length=10,
+        default='#f8f9fa',
+        help_text='Couleur de fond de la carte du moyen de paiement'
+    )
+    text_color = models.CharField(
+        'Couleur du texte',
+        max_length=10,
+        default='#212529',
+        help_text='Couleur du texte sur la carte'
+    )
+    border_color = models.CharField(
+        'Couleur de la bordure',
+        max_length=10,
+        default='#dee2e6',
+        help_text='Couleur de la bordure de la carte'
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        db_table = 'tenant_payment_methods'
+        verbose_name = 'Moyen de paiement'
+        verbose_name_plural = 'Moyens de paiement'
+        ordering = ['display_order', 'created_at']
+        unique_together = ['tenant', 'method_type']
+        indexes = [
+            models.Index(fields=['tenant', 'is_active']),
+            models.Index(fields=['display_order']),
+        ]
+    
+    def __str__(self):
+        return f"{self.label} - {self.tenant.name}"
+    
+    @property
+    def formatted_details(self):
+        """Retourne les détails formatés selon le type de paiement"""
+        if self.method_type == 'bank_transfer':
+            return {
+                'iban': self.details.get('iban', ''),
+                'bic': self.details.get('bic', ''),
+                'bank_name': self.details.get('bank_name', ''),
+                'account_holder': self.details.get('account_holder', ''),
+            }
+        elif self.method_type == 'check':
+            return {
+                'payable_to': self.details.get('payable_to', ''),
+                'address': self.details.get('address', ''),
+                'instructions': self.details.get('instructions', ''),
+            }
+        return self.details
 
 
 class TenantDocumentNumbering(models.Model):

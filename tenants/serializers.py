@@ -3,7 +3,7 @@ from django.utils import timezone
 from .models import (
     Tenant, TenantSettings, TenantInvitation, TenantUsage,
     TenantBankInfo, TenantVatRate, TenantPaymentTerm,
-    TenantDocumentNumbering, TenantDocumentAppearance
+    TenantDocumentNumbering, TenantDocumentAppearance, TenantPaymentMethod
 )
 
 
@@ -55,11 +55,85 @@ class TenantDocumentNumberingSerializer(serializers.ModelSerializer):
 class TenantDocumentAppearanceSerializer(serializers.ModelSerializer):
     """Serializer pour l'apparence des documents"""
     logo_position_display = serializers.CharField(source='get_logo_position_display', read_only=True)
+    logo_position_type_display = serializers.CharField(source='get_logo_position_type_display', read_only=True)
     document_template_display = serializers.CharField(source='get_document_template_display', read_only=True)
     
     class Meta:
         model = TenantDocumentAppearance
         exclude = ['tenant', 'created_at', 'updated_at']
+    
+    def validate_logo_size(self, value):
+        """Valider que la taille du logo est dans les limites acceptables"""
+        if value < 50 or value > 200:
+            raise serializers.ValidationError("La taille du logo doit être entre 50% et 200%")
+        return value
+    
+    def validate_logo_data(self, value):
+        """Valider les données du logo en base64"""
+        if value and not value.startswith('data:image/'):
+            raise serializers.ValidationError("Le logo doit être au format base64 valide")
+        return value
+    
+    def validate_table_border_width(self, value):
+        """Valider l'épaisseur des bordures"""
+        if value < 0 or value > 10:
+            raise serializers.ValidationError("L'épaisseur des bordures doit être entre 0 et 10 pixels")
+        return value
+    
+    def validate_table_row_padding(self, value):
+        """Valider l'espacement des lignes"""
+        if value < 0 or value > 50:
+            raise serializers.ValidationError("L'espacement des lignes doit être entre 0 et 50 pixels")
+        return value
+    
+    def validate_table_column_spacing(self, value):
+        """Valider l'espacement des colonnes"""
+        if value < 0 or value > 50:
+            raise serializers.ValidationError("L'espacement des colonnes doit être entre 0 et 50 pixels")
+        return value
+
+
+class TenantPaymentMethodSerializer(serializers.ModelSerializer):
+    """Serializer pour les moyens de paiement personnalisés"""
+    method_type_display = serializers.CharField(source='get_method_type_display', read_only=True)
+    formatted_details = serializers.ReadOnlyField()
+    
+    class Meta:
+        model = TenantPaymentMethod
+        exclude = ['tenant', 'created_at', 'updated_at']
+    
+    def validate_details(self, value):
+        """Valider les détails selon le type de moyen de paiement"""
+        method_type = self.initial_data.get('method_type')
+        
+        if method_type == 'bank_transfer':
+            # Pour les virements, l'IBAN est requis
+            if not value.get('iban'):
+                raise serializers.ValidationError("L'IBAN est requis pour les virements bancaires")
+        elif method_type == 'check':
+            # Pour les chèques, l'ordre de paiement est requis
+            if not value.get('payable_to'):
+                raise serializers.ValidationError("L'ordre de paiement est requis pour les chèques")
+        
+        return value
+    
+    def validate_background_color(self, value):
+        """Valider la couleur de fond"""
+        if value and not value.startswith('#'):
+            raise serializers.ValidationError("La couleur doit être au format hexadécimal (#RRGGBB)")
+        return value
+    
+    def validate_text_color(self, value):
+        """Valider la couleur du texte"""
+        if value and not value.startswith('#'):
+            raise serializers.ValidationError("La couleur doit être au format hexadécimal (#RRGGBB)")
+        return value
+    
+    def validate_border_color(self, value):
+        """Valider la couleur de la bordure"""
+        if value and not value.startswith('#'):
+            raise serializers.ValidationError("La couleur doit être au format hexadécimal (#RRGGBB)")
+        return value
 
 
 class TenantCreateSerializer(serializers.ModelSerializer):
@@ -115,7 +189,7 @@ class TenantDetailSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tenant
         fields = [
-            'id', 'name', 'slug', 'domain', 'schema_name', 'email', 'phone', 'website',
+            'id', 'name', 'slogan', 'slug', 'domain', 'schema_name', 'email', 'phone', 'website',
             'address_line_1', 'address_line_2', 'city', 'postal_code', 'country',
             'full_address', 'siret', 'ice', 'legal_form',
             'is_active', 'is_trial', 'trial_end_date', 'days_left_in_trial', 'is_trial_expired',
@@ -138,7 +212,7 @@ class TenantUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Tenant
         fields = [
-            'name', 'domain', 'email', 'phone', 'website',
+            'name', 'slogan', 'domain', 'email', 'phone', 'website',
             'address_line_1', 'address_line_2', 'city', 'postal_code', 'country',
             'siret', 'ice', 'legal_form', 
             'settings', 'bank_info', 'document_appearance'

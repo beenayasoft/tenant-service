@@ -100,6 +100,10 @@ def document_appearance_defaults(request):
         'document_template': 'modern',
         'primary_color': '#1B333F',
         'show_logo': True,
+        'logo_data': '',
+        'logo_size': 100,
+        'logo_position_type': 'left',
+        'logo_center_in_header': False,
         'show_company_name': True,
         'show_company_address': True,
         'show_company_email': True,
@@ -113,7 +117,7 @@ def document_appearance_defaults(request):
         'show_payment_terms': True,
         'show_bank_details': True,
         'show_signature_area': True,
-        'logo_position': 'left',
+        'logo_position': 'left',  # Maintenu pour compatibilité
         'font_family': 'Arial',
         'font_size': 11,
         'line_spacing': 1.5,
@@ -125,6 +129,22 @@ def document_appearance_defaults(request):
         'show_legal_mentions': True,
         'table_header_color': '#f8f9fa',
         'table_alternate_color': '#f2f2f2',
+        # Nouveaux champs pour les styles de tableaux
+        'table_border_style': 'straight',
+        'table_border_horizontal': True,
+        'table_border_vertical': True,
+        'table_border_width': 1,
+        'table_border_color': '#dee2e6',
+        'section_contrast': False,
+        'section_contrast_color': '#f8f9fa',
+        'show_section_subtotals': True,
+        'table_row_padding': 8,
+        'table_column_spacing': 12,
+        # Nouveaux champs pour les moyens de paiement
+        'show_payment_methods': True,
+        'payment_methods_title': 'Moyens de paiement',
+        'payment_methods_layout': 'horizontal',
+        'payment_methods_style': 'modern',
         'header_text': '',
         'footer_text': '',
         'legal_mentions': ''
@@ -331,7 +351,7 @@ def color_presets(request):
     Endpoint pour récupérer les couleurs prédéfinies
     """
     presets = [
-        {'name': 'Bleu Benaya', 'value': '#1B333F'},
+        {'name': 'Bleu Beenaya', 'value': '#1B333F'},
         {'name': 'Bleu Roi', 'value': '#1E40AF'},
         {'name': 'Vert Émeraude', 'value': '#047857'},
         {'name': 'Rouge Rubis', 'value': '#B91C1C'},
@@ -340,3 +360,95 @@ def color_presets(request):
     ]
     
     return Response(presets)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def logo_position_choices(request):
+    """
+    Endpoint pour récupérer les choix de position du logo
+    """
+    positions = [
+        {
+            'value': 'left',
+            'label': 'À gauche',
+            'description': 'Le logo sera affiché à gauche, les informations d\'entreprise à côté'
+        },
+        {
+            'value': 'top',
+            'label': 'En haut',
+            'description': 'Le logo sera affiché en haut, les informations d\'entreprise en dessous'
+        },
+        {
+            'value': 'header',
+            'label': 'Dans l\'en-tête',
+            'description': 'Le logo sera intégré dans l\'en-tête du document'
+        }
+    ]
+    
+    return Response(positions)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def table_style_choices(request):
+    """
+    Endpoint pour récupérer les choix de styles de tableaux
+    """
+    styles = {
+        'border_styles': [
+            {
+                'value': 'straight',
+                'label': 'Bordures droites',
+                'description': 'Bordures classiques avec angles droits'
+            },
+            {
+                'value': 'rounded',
+                'label': 'Bordures arrondies',
+                'description': 'Bordures avec angles arrondis pour un aspect moderne'
+            }
+        ],
+        'predefined_styles': {
+            'modern': {
+                'name': 'Style moderne',
+                'description': 'Bordures arrondies, sections contrastées',
+                'config': {
+                    'table_border_style': 'rounded',
+                    'table_border_horizontal': True,
+                    'table_border_vertical': False,
+                    'table_border_width': 1,
+                    'section_contrast': True,
+                    'table_row_padding': 12,
+                    'table_column_spacing': 16
+                }
+            },
+            'classic': {
+                'name': 'Style classique',
+                'description': 'Bordures droites, tableau complet',
+                'config': {
+                    'table_border_style': 'straight',
+                    'table_border_horizontal': True,
+                    'table_border_vertical': True,
+                    'table_border_width': 1,
+                    'section_contrast': False,
+                    'table_row_padding': 8,
+                    'table_column_spacing': 12
+                }
+            },
+            'minimal': {
+                'name': 'Style minimal',
+                'description': 'Bordures horizontales uniquement',
+                'config': {
+                    'table_border_style': 'straight',
+                    'table_border_horizontal': True,
+                    'table_border_vertical': False,
+                    'table_border_width': 1,
+                    'section_contrast': False,
+                    'table_row_padding': 6,
+                    'table_column_spacing': 8
+                }
+            }
+        }
+    }
+    
+    return Response(styles)

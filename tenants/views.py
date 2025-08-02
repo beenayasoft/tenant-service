@@ -240,6 +240,24 @@ def current_tenant_info(request):
             
             # Mettre à jour les champs de base du tenant
             data = request.data
+            logger.info(f"🔍 DÉBUT DEBUG - Données reçues dans la requête:")
+            logger.info(f"🔍 Clés disponibles: {list(data.keys())}")
+            logger.info(f"🔍 Taille totale des données: {len(str(data))} caractères")
+            
+            # Debug spécifique pour vat_rates
+            if 'vat_rates' in data:
+                logger.info(f"🔍 ✅ VAT_RATES TROUVÉ!")
+                logger.info(f"🔍 Type de vat_rates: {type(data['vat_rates'])}")
+                logger.info(f"🔍 Contenu vat_rates: {data['vat_rates']}")
+                logger.info(f"🔍 Nombre d'éléments vat_rates: {len(data['vat_rates']) if isinstance(data['vat_rates'], list) else 'N/A'}")
+            else:
+                logger.info(f"🔍 ❌ VAT_RATES PAS TROUVÉ!")
+                logger.info(f"🔍 Toutes les clés: {list(data.keys())}")
+                
+            # Log de toutes les données pour debug complet
+            for key, value in data.items():
+                if key != 'vat_rates':  # On évite de logger 2 fois vat_rates
+                    logger.info(f"🔍 {key}: {type(value)} - {str(value)[:100]}{'...' if len(str(value)) > 100 else ''}")
             
             # Champs de base
             if 'name' in data:
@@ -286,7 +304,10 @@ def current_tenant_info(request):
                 if 'logo_url' in settings_data:
                     tenant_settings.logo_url = settings_data['logo_url']
                 if 'logo_base64' in settings_data:
-                    tenant_settings.logo_data = settings_data['logo_base64']
+                    logo_data = settings_data['logo_base64']
+                    logger.info(f"🖼️ Logo reçu: {len(logo_data) if logo_data else 0} caractères")
+                    tenant_settings.logo_data = logo_data
+                    logger.info(f"🖼️ Logo sauvegardé en DB")
                 if 'primary_color' in settings_data:
                     tenant_settings.primary_color = settings_data['primary_color']
                 if 'secondary_color' in settings_data:
@@ -359,37 +380,66 @@ def current_tenant_info(request):
                 document_appearance.save()
             
             # Mettre à jour les taux de TVA si présents
+            logger.info(f"🔧 DÉBUT TRAITEMENT VAT_RATES")
+            logger.info(f"🔧 'vat_rates' in data: {'vat_rates' in data}")
+            logger.info(f"🔧 Type de data['vat_rates']: {type(data.get('vat_rates', 'NON_TROUVE'))}")
+            if 'vat_rates' in data:
+                logger.info(f"🔧 Contenu vat_rates: {data['vat_rates']}")
+                logger.info(f"🔧 isinstance list: {isinstance(data['vat_rates'], list)}")
+            
             if 'vat_rates' in data and isinstance(data['vat_rates'], list):
-                logger.info(f"Processing vat_rates with {len(data['vat_rates'])} items")
+                logger.info(f"🔧 ✅ CONDITION REMPLIE - Processing vat_rates with {len(data['vat_rates'])} items")
                 
-                # Supprimer les taux de TVA existants pour ce tenant
-                deleted_count = TenantVatRate.objects.filter(tenant=tenant).count()
-                TenantVatRate.objects.filter(tenant=tenant).delete()
-                logger.info(f"Deleted {deleted_count} existing VAT rates")
+                from django.db import transaction
                 
-                # Créer les nouveaux taux de TVA
-                for i, vat_rate_data in enumerate(data['vat_rates']):
-                    logger.info(f"Creating VAT rate {i+1}: {vat_rate_data}")
-                    
-                    # S'assurer qu'un seul taux est défini par défaut
-                    is_default = vat_rate_data.get('is_default', False)
-                    if is_default:
-                        # Désactiver les autres taux par défaut
-                        TenantVatRate.objects.filter(tenant=tenant, is_default=True).update(is_default=False)
-                    
-                    # Créer le nouveau taux de TVA
-                    vat_rate = TenantVatRate.objects.create(
-                        tenant=tenant,
-                        code=vat_rate_data.get('code', ''),
-                        name=vat_rate_data.get('name', ''),
-                        rate=vat_rate_data.get('rate', 0),
-                        description=vat_rate_data.get('description', ''),
-                        is_default=is_default,
-                        is_active=vat_rate_data.get('is_active', True)
-                    )
-                    logger.info(f"Created VAT rate with ID: {vat_rate.id}, tenant_id: {vat_rate.tenant_id}")
-                
-                logger.info(f"Taux de TVA mis à jour pour le tenant {tenant_id}")
+                try:
+                    with transaction.atomic():
+                        # Supprimer les taux de TVA existants pour ce tenant
+                        deleted_count = TenantVatRate.objects.filter(tenant=tenant).count()
+                        TenantVatRate.objects.filter(tenant=tenant).delete()
+                        logger.info(f"Deleted {deleted_count} existing VAT rates")
+                        
+                        # Créer les nouveaux taux de TVA
+                        for i, vat_rate_data in enumerate(data['vat_rates']):
+                            logger.info(f"Creating VAT rate {i+1}: {vat_rate_data}")
+                            
+                            # S'assurer qu'un seul taux est défini par défaut
+                            is_default = vat_rate_data.get('is_default', False)
+                            
+                            # Créer le nouveau taux de TVA
+                            vat_rate = TenantVatRate.objects.create(
+                                tenant=tenant,
+                                code=vat_rate_data.get('code', ''),
+                                name=vat_rate_data.get('name', ''),
+                                rate=vat_rate_data.get('rate', 0),
+                                description=vat_rate_data.get('description', ''),
+                                is_default=is_default,
+                                is_active=vat_rate_data.get('is_active', True)
+                            )
+                            logger.info(f"✅ Created VAT rate with ID: {vat_rate.id}, tenant_id: {vat_rate.tenant_id}")
+                        
+                        # S'assurer qu'un seul taux est défini par défaut après création
+                        default_rates = TenantVatRate.objects.filter(tenant=tenant, is_default=True)
+                        if default_rates.count() > 1:
+                            # Garder seulement le premier comme défaut
+                            first_default = default_rates.first()
+                            default_rates.exclude(id=first_default.id).update(is_default=False)
+                            logger.info(f"Kept only one default VAT rate: {first_default.code}")
+                        elif default_rates.count() == 0:
+                            # S'il n'y a pas de taux par défaut, définir le premier comme défaut
+                            first_rate = TenantVatRate.objects.filter(tenant=tenant).first()
+                            if first_rate:
+                                first_rate.is_default = True
+                                first_rate.save()
+                                logger.info(f"Set first VAT rate as default: {first_rate.code}")
+                        
+                        logger.info(f"Taux de TVA mis à jour pour le tenant {tenant_id} - Transaction commitée")
+                        
+                except Exception as vat_error:
+                    logger.error(f"❌ Erreur lors de la mise à jour des taux de TVA: {str(vat_error)}")
+                    import traceback
+                    logger.error(f"❌ Traceback: {traceback.format_exc()}")
+                    # La transaction sera automatiquement rollback
             
             # Mettre à jour la numérotation des documents si présente
             logger.info(f"Données reçues: {data.keys()}")
@@ -461,6 +511,9 @@ def current_tenant_info(request):
         # Récupérer les configurations de numérotation
         document_numbering = tenant.document_numbering.all()
         
+        # Log pour débugger le logo renvoyé
+        logger.info(f"🔍 Logo renvoyé au frontend: {len(tenant_settings.logo_data) if tenant_settings.logo_data else 0} caractères")
+        
         # Construire la réponse avec toutes les informations nécessaires
         response_data = {
             # Informations de base
@@ -490,7 +543,7 @@ def current_tenant_info(request):
             # Paramètres visuels et généraux
             'settings': {
                 'logo_url': tenant_settings.logo_url,
-                'logo_base64': tenant_settings.logo_base64,
+                'logo_data': tenant_settings.logo_data,
                 'primary_color': tenant_settings.primary_color,
                 'secondary_color': tenant_settings.secondary_color,
                 'accent_color': tenant_settings.accent_color,
@@ -499,12 +552,12 @@ def current_tenant_info(request):
                 'currency': tenant_settings.currency,
                 'date_format': tenant_settings.date_format,
                 'notifications': {
-                    'email_enabled': tenant_settings.email_notifications_enabled,
-                    'sms_enabled': tenant_settings.sms_notifications_enabled,
-                    'push_enabled': tenant_settings.push_notifications_enabled
+                    'email_enabled': tenant_settings.email_notifications,
+                    'sms_enabled': tenant_settings.sms_notifications,
+                    'push_enabled': tenant_settings.push_notifications
                 },
                 'security': {
-                    'two_factor_required': tenant_settings.two_factor_required,
+                    'two_factor_required': tenant_settings.require_2fa,
                     'password_expiry_days': tenant_settings.password_expiry_days,
                     'session_timeout_minutes': tenant_settings.session_timeout_minutes
                 }
@@ -515,7 +568,7 @@ def current_tenant_info(request):
                 'bank_name': bank_info.bank_name,
                 'iban': bank_info.iban,
                 'bic': bank_info.bic,
-                'account_owner': bank_info.account_owner
+                'account_owner': ''  # Champ pas encore implémenté dans le modèle
             },
             
             # Taux de TVA personnalisés
@@ -850,6 +903,106 @@ def get_document_numbering_config(request, document_type):
             status=404
         )
     except Exception as e:
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['POST', 'PUT', 'PATCH'])
+@permission_classes([permissions.AllowAny])
+def manage_document_numbering_config(request):
+    """
+    Endpoint pour créer/modifier les configurations de numérotation
+    POST /api/tenants/document_numbering/
+    PUT/PATCH /api/tenants/document_numbering/
+    """
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response({'error': 'X-Tenant-ID header requis'}, status=400)
+    
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        
+        if request.method == 'POST':
+            # Créer une nouvelle configuration
+            document_type = request.data.get('document_type')
+            if not document_type:
+                return Response({'error': 'document_type requis'}, status=400)
+            
+            # Vérifier si la configuration existe déjà
+            existing_config = TenantDocumentNumbering.objects.filter(
+                tenant=tenant,
+                document_type=document_type
+            ).first()
+            
+            if existing_config:
+                # Mettre à jour la configuration existante
+                serializer = TenantDocumentNumberingSerializer(
+                    existing_config, 
+                    data=request.data, 
+                    partial=True
+                )
+                if serializer.is_valid():
+                    serializer.save()
+                    return Response(serializer.data, status=200)
+                return Response(serializer.errors, status=400)
+            else:
+                # Créer une nouvelle configuration
+                data = request.data.copy()
+                data['tenant'] = tenant.id
+                serializer = TenantDocumentNumberingSerializer(data=data)
+                if serializer.is_valid():
+                    serializer.save(tenant=tenant)
+                    return Response(serializer.data, status=201)
+                return Response(serializer.errors, status=400)
+                
+        elif request.method in ['PUT', 'PATCH']:
+            # Mettre à jour les configurations existantes (bulk update)
+            document_numbering_list = request.data.get('document_numbering', [])
+            if not document_numbering_list:
+                return Response({'error': 'document_numbering list requis'}, status=400)
+            
+            updated_configs = []
+            for config_data in document_numbering_list:
+                document_type = config_data.get('document_type')
+                if not document_type:
+                    continue
+                    
+                numbering, created = TenantDocumentNumbering.objects.get_or_create(
+                    tenant=tenant,
+                    document_type=document_type,
+                    defaults={
+                        'prefix': config_data.get('prefix', 'DOC'),
+                        'padding': config_data.get('padding', 3),
+                        'include_year': config_data.get('include_year', True),
+                        'include_month': config_data.get('include_month', False),
+                        'include_day': config_data.get('include_day', False),
+                        'separator': config_data.get('separator', '-'),
+                    }
+                )
+                
+                # Mettre à jour avec les nouvelles données
+                serializer = TenantDocumentNumberingSerializer(
+                    numbering, 
+                    data=config_data, 
+                    partial=True
+                )
+                if serializer.is_valid():
+                    serializer.save()
+                    updated_configs.append(serializer.data)
+            
+            return Response({
+                'message': f'{len(updated_configs)} configurations mises à jour',
+                'configurations': updated_configs
+            }, status=200)
+            
+    except Tenant.DoesNotExist:
+        return Response(
+            {'error': f'Tenant {tenant_id} non trouvé'}, 
+            status=404
+        )
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Erreur gestion configuration numérotation: {e}")
         return Response({'error': str(e)}, status=500)
 
 
