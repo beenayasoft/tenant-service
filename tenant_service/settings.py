@@ -129,6 +129,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:8002",
     "http://localhost:3000",  # React frontend
     "http://127.0.0.1:3000",
+    ".vercel.app",  # Vercel frontend
+    "https://*.vercel.app",
 ] if not DEBUG else []
 
 CORS_ALLOW_HEADERS = [
