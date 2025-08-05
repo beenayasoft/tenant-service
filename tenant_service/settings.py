@@ -128,6 +128,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8002",  # auth-service
     "http://127.0.0.1:8002",
     "http://localhost:3000",  # React frontend
+    ".vercel.app"
     "http://127.0.0.1:3000",
 ] if not DEBUG else []
 
