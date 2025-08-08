@@ -1,0 +1,1 @@
+web: gunicorn tenant_service.wsgi
