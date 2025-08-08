@@ -14,6 +14,12 @@ class Tenant(models.Model):
     slogan = models.CharField('Slogan/description de l\'entreprise', null=True,max_length=255, blank=True)
     slug = models.SlugField('Slug', max_length=255, unique=True, blank=True)
     schema_error = models.TextField(null=True, blank=True)
+    schema_progress = models.JSONField(null=True, blank=True)          # JSONB
+    schema_status   = models.CharField(                                # VARCHAR
+        max_length=20,
+        default="pending",
+        choices=[("pending", "Pending"), ("ready", "Ready"), ("failed", "Failed")],
+    )
     domain = models.CharField('Domaine', max_length=255, unique=True, null=True, blank=True)
     schema_name = models.CharField(
         'Nom du schéma PostgreSQL',
