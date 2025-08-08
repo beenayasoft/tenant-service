@@ -11,8 +11,9 @@ class Tenant(models.Model):
     # Identifiants
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField('Nom de l\'entreprise', max_length=255, unique=True)
-    slogan = models.CharField('Slogan/description de l\'entreprise', max_length=255, blank=True)
+    slogan = models.CharField('Slogan/description de l\'entreprise', null=True,max_length=255, blank=True)
     slug = models.SlugField('Slug', max_length=255, unique=True, blank=True)
+    schema_error = models.TextField(null=True, blank=True)
     domain = models.CharField('Domaine', max_length=255, unique=True, null=True, blank=True)
     schema_name = models.CharField(
         'Nom du schéma PostgreSQL',
