@@ -170,6 +170,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 API_PORT = config('API_PORT', default=8001, cast=int)
 API_HOST = config('API_HOST', default='0.0.0.0')
 
+# SOA Configuration pour ServiceClient
+SERVICE_NAME = 'tenant'
+SERVICE_PORT = API_PORT
+API_GATEWAY_URL = config('API_GATEWAY_URL', default='http://localhost:8000')
+SERVICE_HEALTH_ENDPOINT = '/health/'
+SERVICE_ROUTES = ['/api/tenants/']
+
 # Créer le dossier logs s'il n'existe pas
 LOGS_DIR = BASE_DIR / 'logs'
 LOGS_DIR.mkdir(exist_ok=True)
@@ -197,6 +204,7 @@ LOGGING = {
             'class': 'logging.FileHandler',
             'filename': LOGS_DIR / 'tenant.log',
             'formatter': 'verbose',
+            'encoding': 'utf-8',
         },
     },
     'root': {

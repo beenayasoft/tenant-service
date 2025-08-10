@@ -4,7 +4,8 @@ from .views import (
     TenantViewSet, validate_tenant, health_check, current_tenant_info,
     preview_document_number, increment_document_counter, 
     reset_document_counter, get_document_numbering_config,
-    manage_document_numbering_config, tenant_vat_rates, tenant_payment_terms
+    manage_document_numbering_config, tenant_vat_rates, tenant_payment_terms,
+    tenant_setup_progress, retry_tenant_setup
 )
 from .views_document_appearance import (
     tenant_document_appearance, document_appearance_defaults,
@@ -59,6 +60,12 @@ urlpatterns = [
     path('payment_methods/<int:payment_method_id>/', tenant_payment_method_detail, name='tenant_payment_method_detail'),
     path('payment_methods/types/', payment_method_types, name='payment_method_types'),
     path('payment_methods/create_defaults/', create_default_payment_methods, name='create_default_payment_methods'),
+    
+    # Endpoints pour le suivi de création des schémas
+    path('tenants/setup-progress/', tenant_setup_progress, name='tenant_setup_progress'),
+    path('tenants/retry-setup/', retry_tenant_setup, name='retry_tenant_setup'),
+    path('setup-progress/', tenant_setup_progress, name='tenant_setup_progress_alt'),
+    path('retry-setup/', retry_tenant_setup, name='retry_tenant_setup_alt'),
     
     # Endpoint de santé
     path('health/', health_check, name='health_check'),

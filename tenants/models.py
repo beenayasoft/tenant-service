@@ -59,6 +59,39 @@ class Tenant(models.Model):
     max_users = models.IntegerField('Nombre maximum d\'utilisateurs', default=5)
     max_storage_gb = models.IntegerField('Stockage maximum (GB)', default=1)
     
+    # Suivi de la création des schémas
+    SCHEMA_STATUS_CHOICES = [
+        ('pending', 'En attente de création'),
+        ('creating', 'Création en cours'),
+        ('ready', 'Prêt'),
+        ('error', 'Erreur de création'),
+    ]
+    
+    schema_status = models.CharField(
+        'Statut des schémas',
+        max_length=20,
+        choices=SCHEMA_STATUS_CHOICES,
+        default='pending',
+        help_text='Statut de la création des schémas de données pour les services'
+    )
+    schema_progress = models.JSONField(
+        'Progression de la création',
+        default=dict,
+        blank=True,
+        help_text='Détails de progression de la création des schémas'
+    )
+    schema_created_at = models.DateTimeField(
+        'Schémas créés le',
+        null=True,
+        blank=True,
+        help_text='Date de finalisation de la création des schémas'
+    )
+    schema_error = models.TextField(
+        'Erreur de création',
+        blank=True,
+        help_text='Détails de l\'erreur si la création a échoué'
+    )
+    
     # Métadonnées
     created_at = models.DateTimeField('Créé le', auto_now_add=True)
     updated_at = models.DateTimeField('Modifié le', auto_now=True)
@@ -136,6 +169,38 @@ class Tenant(models.Model):
             self.country
         ]
         return ', '.join([part for part in parts if part])
+    
+    @property
+    def is_schema_ready(self):
+        """Vérifie si tous les schémas sont prêts"""
+        return self.schema_status == 'ready'
+    
+    @property
+    def is_schema_creating(self):
+        """Vérifie si la création des schémas est en cours"""
+        return self.schema_status == 'creating'
+    
+    @property
+    def schema_progress_percentage(self):
+        """Calcule le pourcentage de progression"""
+        if not self.schema_progress:
+            return 0
+        
+        total_steps = self.schema_progress.get('total_steps', 4)
+        current_step = self.schema_progress.get('current_step', 0)
+        
+        return min(100, int((current_step / total_steps) * 100))
+    
+    def update_schema_progress(self, step: int, total_steps: int, message: str, service: str = None):
+        """Met à jour la progression de création des schémas"""
+        self.schema_progress = {
+            'current_step': step,
+            'total_steps': total_steps,
+            'message': message,
+            'current_service': service,
+            'updated_at': timezone.now().isoformat()
+        }
+        self.save(update_fields=['schema_progress', 'updated_at'])
 
 
 class TenantSettings(models.Model):
@@ -156,7 +221,7 @@ class TenantSettings(models.Model):
     
     # Paramètres visuels
     logo_url = models.URLField('URL du logo', max_length=255, blank=True)
-    logo_data = models.TextField('Données du logo (base64)', blank=True, help_text='Logo encodé en base64')
+    logo_data = models.TextField('Données du logo (base64)', blank=True, null=True, help_text='Logo encodé en base64')
     primary_color = models.CharField('Couleur principale', max_length=10, default='#007bff')
     secondary_color = models.CharField('Couleur secondaire', max_length=10, default='#6c757d')
     accent_color = models.CharField('Couleur d\'accent', max_length=10, default='#28a745')
@@ -302,7 +367,7 @@ class TenantDocumentAppearance(models.Model):
     show_logo = models.BooleanField('Afficher le logo', default=True)
     
     # Configuration avancée du logo
-    logo_data = models.TextField('Données du logo (base64)', blank=True, help_text='Logo encodé en base64')
+    logo_data = models.TextField('Données du logo (base64)', blank=True, null=True, help_text='Logo encodé en base64')
     logo_size = models.IntegerField('Taille du logo (%)', default=100, help_text='Taille du logo en pourcentage (50-200%)')
     logo_position_type = models.CharField(
         'Type de position du logo',

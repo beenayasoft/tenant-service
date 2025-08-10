@@ -29,6 +29,25 @@ def tenant_document_appearance(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
+    # Nettoyer et valider le tenant ID
+    import re
+    
+    # Supprimer les caractères invisibles et prendre le premier UUID en cas de duplication
+    cleaned_tenant_id = re.sub(r'[\xa0\s\u00A0\u2000-\u200B\uFEFF]', '', tenant_id)
+    if ',' in cleaned_tenant_id:
+        cleaned_tenant_id = cleaned_tenant_id.split(',')[0]
+    
+    # Valider le format UUID
+    uuid_pattern = r'^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+    if not re.match(uuid_pattern, cleaned_tenant_id, re.IGNORECASE):
+        logger.error(f"Tenant ID invalide reçu: '{tenant_id}' -> nettoyé: '{cleaned_tenant_id}'")
+        return Response(
+            {"detail": f"Format UUID invalide pour X-Tenant-ID: {cleaned_tenant_id}"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    tenant_id = cleaned_tenant_id
+    
     try:
         tenant = Tenant.objects.get(id=tenant_id)
         

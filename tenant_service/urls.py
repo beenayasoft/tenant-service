@@ -28,12 +28,21 @@ def service_info(request):
         "endpoints": {
             "api": "/api/",
             "admin": "/admin/",
-            "health": "/api/health/"
+            "health": "/health/"
         }
+    })
+
+def health_check(request):
+    """Endpoint de santé au niveau racine pour compatibilité SOA"""
+    return JsonResponse({
+        "service": "tenant-service",
+        "status": "healthy",
+        "version": "2.0.0"
     })
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("health/", health_check, name='health_check_root'),
     path("", service_info, name='service_info'),
     path("api/", include('tenants.urls')),
 ]

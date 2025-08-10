@@ -16,6 +16,7 @@ from .serializers import (
     TenantDocumentNumberingSerializer, TenantDocumentAppearanceSerializer
 )
 from django.utils import timezone
+from .utils import get_client_ip, detect_location_from_ip, create_initial_vat_rates, create_tenant_schemas_async, retry_schema_creation
 
 class TenantViewSet(viewsets.ModelViewSet):
     """
@@ -145,14 +146,153 @@ class TenantViewSet(viewsets.ModelViewSet):
             )
     
     def create(self, request, *args, **kwargs):
-        """Créer un tenant et retourner sa représentation complète"""
+        """Créer un tenant avec détection intelligente basée sur l'IP"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # 1. Détecter la localisation via l'IP
+        client_ip = get_client_ip(request)
+        location_data = detect_location_from_ip(client_ip)
+        
+        logger.info(f"🌍 Création tenant - IP: {client_ip}, Pays détecté: {location_data['country_code']}")
+        
+        # 2. Créer le tenant de base
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         tenant = serializer.save()
         
-        # Utiliser TenantDetailSerializer pour la réponse
-        response_serializer = TenantDetailSerializer(tenant)
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        try:
+            # 3. Créer les paramètres tenant avec les données détectées
+            settings, created = TenantSettings.objects.get_or_create(
+                tenant=tenant,
+                defaults={
+                    'timezone': location_data.get('timezone', 'Africa/Casablanca'),
+                    'language': location_data.get('language', 'fr'),
+                    'currency': location_data.get('currency', 'MAD'),
+                    'date_format': 'DD/MM/YYYY',  # Format européen/africain par défaut
+                    'logo_data': '',  # Éviter les problèmes de null
+                    'primary_color': '#007bff',
+                    'secondary_color': '#6c757d',
+                    'accent_color': '#28a745',
+                    'email_notifications': True,
+                    'sms_notifications': False,
+                    'push_notifications': True,
+                    'password_expiry_days': 90,
+                    'max_login_attempts': 5,
+                    'session_timeout_minutes': 480,
+                    'require_2fa': False
+                }
+            )
+            
+            # 4. Mettre à jour les informations tenant avec les données géographiques
+            if location_data.get('country_name') and not tenant.country:
+                tenant.country = location_data['country_name']
+            
+            if location_data.get('city') and not tenant.city:
+                tenant.city = location_data['city']
+                
+            if location_data.get('postal_code') and not tenant.postal_code:
+                tenant.postal_code = location_data['postal_code']
+                
+            tenant.save()
+            
+            # 5. Créer les taux de TVA intelligents basés sur le pays
+            country_code = location_data.get('country_code', 'MA')
+            vat_rates_count = create_initial_vat_rates(tenant, country_code)
+            
+            # 6. Créer l'apparence des documents par défaut
+            document_appearance, created = TenantDocumentAppearance.objects.get_or_create(
+                tenant=tenant,
+                defaults={
+                    'document_template': 'modern',
+                    'primary_color': '#1B333F',
+                    'show_logo': True,
+                    'logo_data': '',  # Éviter les problèmes de null
+                    'logo_size': 100,
+                    'logo_position_type': 'left',
+                    'logo_center_in_header': False,
+                    'show_company_name': True,
+                    'show_company_slogan': True,
+                    'show_company_address': True,
+                    'show_company_email': True,
+                    'show_company_phone': True,
+                    'show_company_website': True,
+                    'show_company_siret': True,
+                    'show_company_ice': True,
+                    'show_client_address': True,
+                    'show_project_info': True,
+                    'show_notes': True,
+                    'show_payment_terms': True,
+                    'show_bank_details': True,
+                    'show_signature_area': True,
+                    'font_family': 'Arial',
+                    'font_size': 11,
+                    'line_spacing': 1.5,
+                    'margin_top': 25,
+                    'margin_right': 20,
+                    'margin_bottom': 25,
+                    'margin_left': 20,
+                    'table_header_color': '#f8f9fa',
+                    'table_alternate_color': '#f2f2f2',
+                    'table_border_style': 'straight',
+                    'table_border_horizontal': True,
+                    'table_border_vertical': True,
+                    'table_border_width': 1,
+                    'table_border_color': '#dee2e6',
+                    'show_payment_methods': True,
+                    'payment_methods_title': 'Moyens de paiement',
+                    'payment_methods_layout': 'horizontal',
+                    'payment_methods_style': 'modern'
+                }
+            )
+            
+            logger.info(f"✅ Tenant créé avec succès: {tenant.name}")
+            logger.info(f"📍 Localisation: {location_data['country_name']} ({country_code})")
+            logger.info(f"💰 Devise: {location_data['currency']}")
+            logger.info(f"📊 Taux de TVA créés: {vat_rates_count}")
+            
+            # 7. Préparer la réponse avec les données détectées
+            response_serializer = TenantDetailSerializer(tenant)
+            response_data = response_serializer.data
+            
+            # Ajouter les informations de détection pour le frontend
+            response_data['detected_location'] = {
+                'ip_address': client_ip,
+                'country_code': location_data['country_code'],
+                'country_name': location_data['country_name'],
+                'currency': location_data['currency'],
+                'timezone': location_data['timezone'],
+                'language': location_data['language'],
+                'city': location_data.get('city'),
+                'region': location_data.get('region'),
+                'vat_rates_created': vat_rates_count,
+                'detection_error': location_data.get('error')
+            }
+            
+            # Informations sur la création des schémas
+            response_data['schema_setup'] = {
+                'status': tenant.schema_status,
+                'progress': tenant.schema_progress,
+                'requires_setup': tenant.schema_status == 'pending',
+                'setup_url': f'/setup-progress/{tenant.id}/'
+            }
+            
+            # 8. Déclencher la création asynchrone des schémas
+            if tenant.schema_status == 'pending':
+                logger.info(f"🚀 Déclenchement création asynchrone des schémas pour {tenant.name}")
+                create_tenant_schemas_async(str(tenant.id))
+            
+            return Response(response_data, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de la configuration intelligente du tenant {tenant.name}: {e}")
+            # En cas d'erreur, retourner quand même le tenant créé
+            response_serializer = TenantDetailSerializer(tenant)
+            response_data = response_serializer.data
+            response_data['detected_location'] = {
+                'error': f"Erreur de configuration: {str(e)}"
+            }
+            return Response(response_data, status=status.HTTP_201_CREATED)
     
     @action(detail=True, methods=['get'])
     def tenant_settings(self, request, pk=None):
@@ -512,7 +652,7 @@ def current_tenant_info(request):
         document_numbering = tenant.document_numbering.all()
         
         # Log pour débugger le logo renvoyé
-        logger.info(f"🔍 Logo renvoyé au frontend: {len(tenant_settings.logo_data) if tenant_settings.logo_data else 0} caractères")
+        logger.info(f"Logo renvoye au frontend: {len(tenant_settings.logo_data) if tenant_settings.logo_data else 0} caracteres")
         
         # Construire la réponse avec toutes les informations nécessaires
         response_data = {
@@ -1452,3 +1592,121 @@ def health_check(request):
         "status": "healthy",
         "version": "2.0.0"
     })
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def tenant_setup_progress(request):
+    """
+    API pour suivre la progression de la création des schémas tenant
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response(
+            {"detail": "X-Tenant-ID header is required"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        
+        response_data = {
+            'tenant_id': str(tenant.id),
+            'tenant_name': tenant.name,
+            'schema_status': tenant.schema_status,
+            'schema_progress': tenant.schema_progress,
+            'schema_created_at': tenant.schema_created_at,
+            'schema_error': tenant.schema_error,
+            'progress_percentage': tenant.schema_progress_percentage,
+            'is_ready': tenant.is_schema_ready,
+            'is_creating': tenant.is_schema_creating,
+        }
+        
+        # Ajouter des informations contextuelles selon le statut
+        if tenant.schema_status == 'pending':
+            response_data['message'] = "La configuration de vos services est en attente de démarrage."
+            response_data['action'] = "wait"
+            
+        elif tenant.schema_status == 'creating':
+            current_service = tenant.schema_progress.get('current_service', 'unknown')
+            response_data['message'] = tenant.schema_progress.get('message', 'Configuration en cours...')
+            response_data['current_service'] = current_service
+            response_data['action'] = "wait"
+            
+        elif tenant.schema_status == 'ready':
+            response_data['message'] = "Tous vos services sont prêts ! Vous pouvez commencer à utiliser la plateforme."
+            response_data['action'] = "redirect"
+            response_data['redirect_url'] = "/dashboard"
+            
+        elif tenant.schema_status == 'error':
+            response_data['message'] = f"Une erreur est survenue : {tenant.schema_error}"
+            response_data['action'] = "retry"
+            response_data['can_retry'] = True
+        
+        return Response(response_data)
+        
+    except Tenant.DoesNotExist:
+        return Response(
+            {"detail": f"Tenant with id {tenant_id} not found"}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération du progrès: {str(e)}")
+        return Response(
+            {"detail": f"Une erreur est survenue: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+@permission_classes([permissions.AllowAny])
+def retry_tenant_setup(request):
+    """
+    API pour relancer la création des schémas en cas d'erreur
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    tenant_id = request.headers.get('X-Tenant-ID')
+    if not tenant_id:
+        return Response(
+            {"detail": "X-Tenant-ID header is required"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        
+        if tenant.schema_status not in ['error', 'pending']:
+            return Response(
+                {"detail": f"Cannot retry setup for tenant with status: {tenant.schema_status}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Relancer la création
+        success = retry_schema_creation(tenant_id)
+        
+        if success:
+            return Response({
+                "message": "Création des schémas relancée avec succès",
+                "tenant_id": tenant_id,
+                "status": "restarted"
+            })
+        else:
+            return Response(
+                {"detail": "Impossible de relancer la création des schémas"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+    except Tenant.DoesNotExist:
+        return Response(
+            {"detail": f"Tenant with id {tenant_id} not found"}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Erreur lors de la relance: {str(e)}")
+        return Response(
+            {"detail": f"Une erreur est survenue: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
