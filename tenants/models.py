@@ -33,6 +33,21 @@ class Tenant(models.Model):
     city = models.CharField('Ville', max_length=100, blank=True)
     postal_code = models.CharField('Code postal', max_length=20, blank=True)
     country = models.CharField('Pays', max_length=100, default='France')
+    country_code = models.CharField('Code pays ISO', max_length=2, blank=True, help_text='Code ISO 3166-1 alpha-2 (ex: FR, MA, US)')
+    
+    # Géolocalisation automatique (détectée lors de la création)
+    detected_location = models.JSONField(
+        'Localisation détectée',
+        default=dict,
+        blank=True,
+        help_text='Informations de géolocalisation détectées automatiquement via IP'
+    )
+    location_detection_date = models.DateTimeField(
+        'Date de détection de localisation',
+        null=True,
+        blank=True,
+        help_text='Date de la dernière détection de géolocalisation'
+    )
     
     # Informations légales
     siret = models.CharField('SIRET', max_length=14, blank=True)
@@ -216,8 +231,30 @@ class TenantSettings(models.Model):
     # Paramètres d'apparence
     timezone = models.CharField('Fuseau horaire', max_length=50, default='Europe/Paris')
     language = models.CharField('Langue', max_length=10, default='fr')
-    currency = models.CharField('Devise', max_length=3, default='MAD')
+    currency = models.CharField('Devise', max_length=3, default='MAD', help_text='Code ISO 4217 de la devise (ex: MAD, EUR, USD)')
+    currency_symbol = models.CharField('Symbole de devise', max_length=10, default='DH', help_text='Symbole affiché pour la devise')
+    currency_position = models.CharField(
+        'Position du symbole',
+        max_length=10,
+        choices=[('before', 'Avant le montant'), ('after', 'Après le montant')],
+        default='after',
+        help_text='Position du symbole de devise par rapport au montant'
+    )
+    locale = models.CharField('Locale', max_length=10, default='fr-MA', help_text='Locale pour le formatage des nombres et dates')
     date_format = models.CharField('Format de date', max_length=20, default='DD/MM/YYYY')
+    
+    # Configuration de devise automatique
+    currency_auto_detected = models.BooleanField(
+        'Devise détectée automatiquement',
+        default=False,
+        help_text='Indique si la devise a été détectée automatiquement via géolocalisation'
+    )
+    currency_detection_date = models.DateTimeField(
+        'Date de détection de devise',
+        null=True,
+        blank=True,
+        help_text='Date de la dernière détection automatique de devise'
+    )
     
     # Paramètres visuels
     logo_url = models.URLField('URL du logo', max_length=255, blank=True)

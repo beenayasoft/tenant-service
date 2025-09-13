@@ -12,7 +12,7 @@ from .serializers import TenantDocumentAppearanceSerializer
 logger = logging.getLogger(__name__)
 
 
-@api_view(['GET', 'PUT', 'PATCH'])
+@api_view(['GET', 'PUT', 'PATCH', 'POST'])
 @permission_classes([AllowAny])
 def tenant_document_appearance(request):
     """
@@ -62,10 +62,19 @@ def tenant_document_appearance(request):
         # GET: Récupérer les paramètres
         if request.method == 'GET':
             serializer = TenantDocumentAppearanceSerializer(document_appearance)
-            return Response(serializer.data)
+            return Response({
+                'success': True,
+                'data': {
+                    'id': str(document_appearance.id) if hasattr(document_appearance, 'id') else None,
+                    'tenant_id': str(tenant.id),
+                    'document_appearance': serializer.data,
+                    'created_at': document_appearance.created_at.isoformat() if hasattr(document_appearance, 'created_at') else None,
+                    'updated_at': document_appearance.updated_at.isoformat() if hasattr(document_appearance, 'updated_at') else None,
+                }
+            })
         
-        # PUT/PATCH: Mettre à jour les paramètres
-        elif request.method in ['PUT', 'PATCH']:
+        # POST/PUT/PATCH: Mettre à jour les paramètres
+        elif request.method in ['POST', 'PUT', 'PATCH']:
             is_partial = request.method == 'PATCH'
             
             # Log détaillé des données reçues
@@ -90,7 +99,16 @@ def tenant_document_appearance(request):
                 logger.info(f"✅ Configuration d'apparence mise à jour pour tenant {tenant_id}")
                 logger.info(f"✅ After save - show_client_address: {saved_instance.show_client_address}, show_project_info: {saved_instance.show_project_info}")
                 
-                return Response(serializer.data)
+                return Response({
+                    'success': True,
+                    'data': {
+                        'id': str(saved_instance.id) if hasattr(saved_instance, 'id') else None,
+                        'tenant_id': str(tenant.id),
+                        'document_appearance': serializer.data,
+                        'updated_at': saved_instance.updated_at.isoformat() if hasattr(saved_instance, 'updated_at') else None,
+                    },
+                    'message': 'Paramètres d\'apparence mis à jour avec succès'
+                })
             else:
                 logger.error(f"❌ Erreurs de validation: {serializer.errors}")
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

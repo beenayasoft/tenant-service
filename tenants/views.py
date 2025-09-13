@@ -2,6 +2,7 @@ from django.shortcuts import render
 from rest_framework import viewsets, status, generics, permissions
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
+from django.views.decorators.http import require_http_methods
 from django.shortcuts import get_object_or_404
 from .models import (
     Tenant, TenantSettings, TenantInvitation, TenantUsage,
@@ -17,6 +18,10 @@ from .serializers import (
 )
 from django.utils import timezone
 from .utils import get_client_ip, detect_location_from_ip, create_initial_vat_rates, create_tenant_schemas_async, retry_schema_creation
+from .services.geolocation import GeolocationService
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TenantViewSet(viewsets.ModelViewSet):
     """
@@ -313,6 +318,178 @@ class TenantViewSet(viewsets.ModelViewSet):
         invitations = TenantInvitation.objects.filter(tenant=tenant)
         serializer = TenantInvitationSerializer(invitations, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['post'])
+    def detect_location(self, request):
+        """
+        Détecte la localisation géographique basée sur l'IP du client
+        et retourne la configuration de devise recommandée
+        """
+        try:
+            # Obtenir l'IP du client
+            client_ip = GeolocationService.get_client_ip(request)
+            
+            # Détecter la localisation
+            location_data = GeolocationService.detect_location_from_ip(client_ip)
+            
+            if not location_data:
+                return Response(
+                    {"detail": "Impossible de détecter la localisation"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            return Response({
+                "detected_location": location_data,
+                "supported_countries": GeolocationService.get_supported_countries(),
+                "detection_successful": True
+            })
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la détection de localisation: {str(e)}")
+            return Response(
+                {"detail": f"Erreur de détection: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['post'])
+    def apply_location_config(self, request, pk=None):
+        """
+        Applique automatiquement la configuration de devise et localisation
+        basée sur les données de géolocalisation
+        """
+        try:
+            tenant = self.get_object()
+            
+            # Détecter la localisation si pas déjà fait
+            if not tenant.detected_location:
+                client_ip = GeolocationService.get_client_ip(request)
+                location_data = GeolocationService.detect_location_from_ip(client_ip)
+                
+                if not location_data:
+                    return Response(
+                        {"detail": "Impossible de détecter la localisation"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            else:
+                location_data = tenant.detected_location
+            
+            # Appliquer la configuration
+            success, message = GeolocationService.apply_location_to_tenant(tenant, location_data)
+            
+            if success:
+                # Retourner les données mises à jour
+                serializer = TenantDetailSerializer(tenant)
+                response_data = serializer.data
+                response_data['configuration_applied'] = {
+                    'success': True,
+                    'message': message,
+                    'applied_config': {
+                        'currency': location_data.get('currency'),
+                        'currency_symbol': location_data.get('currency_symbol'),
+                        'country': location_data.get('country_name'),
+                        'timezone': location_data.get('timezone'),
+                        'locale': location_data.get('locale')
+                    }
+                }
+                return Response(response_data)
+            else:
+                return Response(
+                    {"detail": message},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+                
+        except Exception as e:
+            logger.error(f"Erreur lors de l'application de la configuration: {str(e)}")
+            return Response(
+                {"detail": f"Erreur: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=['get'])
+    def supported_currencies(self, request):
+        """
+        Retourne la liste des devises supportées avec leurs informations
+        """
+        currencies = GeolocationService.get_supported_countries()
+        
+        # Grouper par devise pour éviter les doublons
+        currency_map = {}
+        for country in currencies:
+            currency_code = country['currency']
+            if currency_code not in currency_map:
+                currency_map[currency_code] = {
+                    'code': currency_code,
+                    'symbol': country['currency_symbol'],
+                    'name': f"{country['currency']} - {country['currency_symbol']}",
+                    'position': country['currency_position'],
+                    'locale': country['locale'],
+                    'countries': []
+                }
+            currency_map[currency_code]['countries'].append({
+                'code': country['code'],
+                'name': country['name']
+            })
+        
+        return Response({
+            "currencies": list(currency_map.values()),
+            "total_currencies": len(currency_map),
+            "total_countries": len(currencies)
+        })
+
+    @action(detail=True, methods=['post'])
+    def update_currency_config(self, request, pk=None):
+        """
+        Met à jour manuellement la configuration de devise du tenant
+        """
+        try:
+            tenant = self.get_object()
+            currency_code = request.data.get('currency')
+            
+            if not currency_code:
+                return Response(
+                    {"detail": "Le code de devise est requis"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Trouver la configuration pour cette devise
+            supported_countries = GeolocationService.get_supported_countries()
+            currency_config = None
+            
+            for country in supported_countries:
+                if country['currency'] == currency_code:
+                    currency_config = country
+                    break
+            
+            if not currency_config:
+                return Response(
+                    {"detail": f"Devise {currency_code} non supportée"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Mettre à jour les settings du tenant
+            settings, created = TenantSettings.objects.get_or_create(tenant=tenant)
+            settings.currency = currency_config['currency']
+            settings.currency_symbol = currency_config['currency_symbol']
+            settings.currency_position = currency_config['currency_position']
+            settings.locale = currency_config['locale']
+            settings.timezone = currency_config['timezone']
+            settings.language = currency_config['language']
+            settings.currency_auto_detected = False  # Configuration manuelle
+            settings.currency_detection_date = timezone.now()
+            settings.save()
+            
+            logger.info(f"Configuration de devise mise à jour manuellement pour {tenant.name}: {currency_code}")
+            
+            # Retourner les données mises à jour
+            serializer = TenantDetailSerializer(tenant)
+            return Response(serializer.data)
+            
+        except Exception as e:
+            logger.error(f"Erreur lors de la mise à jour de devise: {str(e)}")
+            return Response(
+                {"detail": f"Erreur: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     @action(detail=True, methods=['post'])
     def invite(self, request, pk=None):
@@ -503,21 +680,37 @@ def current_tenant_info(request):
                 # Sauvegarder les modifications des informations bancaires
                 bank_info.save()
                 
-            # Mettre à jour l'apparence des documents si présente
+            # Mettre à jour l'apparence des documents si présente - UTILISER LE SERIALIZER
             if 'document_appearance' in data and isinstance(data['document_appearance'], dict):
                 appearance_data = data['document_appearance']
+                logger.info(f"🔧 Document appearance data received: {appearance_data}")
+                logger.info(f"🔧 showLogo value in received data: {appearance_data.get('showLogo', 'NOT_FOUND')}")
+                
                 try:
                     document_appearance = tenant.document_appearance
+                    logger.info(f"🔧 Current show_logo value in DB: {document_appearance.show_logo}")
                 except TenantDocumentAppearance.DoesNotExist:
                     document_appearance = TenantDocumentAppearance.objects.create(tenant=tenant)
+                    logger.info(f"🔧 Created new document_appearance for tenant {tenant.id}")
                     
-                # Mettre à jour les champs d'apparence
-                for field, value in appearance_data.items():
-                    if hasattr(document_appearance, field):
-                        setattr(document_appearance, field, value)
-                        
-                # Sauvegarder les modifications d'apparence
-                document_appearance.save()
+                # Utiliser le serializer pour un mapping correct camelCase -> snake_case
+                from .serializers import TenantDocumentAppearanceSerializer
+                appearance_serializer = TenantDocumentAppearanceSerializer(
+                    document_appearance, 
+                    data=appearance_data, 
+                    partial=True
+                )
+                
+                if appearance_serializer.is_valid():
+                    logger.info(f"🔧 Serializer validated_data: {appearance_serializer.validated_data}")
+                    logger.info(f"🔧 show_logo in validated_data: {appearance_serializer.validated_data.get('show_logo', 'NOT_FOUND')}")
+                    
+                    saved_instance = appearance_serializer.save()
+                    logger.info(f"✅ Document appearance updated successfully via serializer")
+                    logger.info(f"🔧 Final show_logo value after save: {saved_instance.show_logo}")
+                else:
+                    logger.error(f"❌ Document appearance serializer errors: {appearance_serializer.errors}")
+                    logger.error(f"❌ Input data was: {appearance_data}")
             
             # Mettre à jour les taux de TVA si présents
             logger.info(f"🔧 DÉBUT TRAITEMENT VAT_RATES")
@@ -806,26 +999,10 @@ def current_tenant_info(request):
                 'updated_at': numbering.updated_at
             })
         
-        # Ajouter l'apparence des documents
-        response_data['document_appearance'] = {
-            'header_text': document_appearance.header_text,
-            'footer_text': document_appearance.footer_text,
-            'show_logo': document_appearance.show_logo,
-            'logo_position': document_appearance.logo_position,
-            'logo_position_display': document_appearance.get_logo_position_display(),
-            'font_family': document_appearance.font_family,
-            'font_size': document_appearance.font_size,
-            'line_spacing': document_appearance.line_spacing,
-            'margin_top': document_appearance.margin_top,
-            'margin_right': document_appearance.margin_right,
-            'margin_bottom': document_appearance.margin_bottom,
-            'margin_left': document_appearance.margin_left,
-            'show_payment_details': document_appearance.show_payment_details,
-            'show_legal_mentions': document_appearance.show_legal_mentions,
-            'legal_mentions': document_appearance.legal_mentions,
-            'table_header_color': document_appearance.table_header_color,
-            'table_alternate_color': document_appearance.table_alternate_color
-        }
+        # Ajouter l'apparence des documents - UTILISER LE SERIALIZER POUR LE MAPPING CORRECT
+        from .serializers import TenantDocumentAppearanceSerializer
+        appearance_serializer = TenantDocumentAppearanceSerializer(document_appearance)
+        response_data['document_appearance'] = appearance_serializer.data
         
         return Response(response_data)
         
@@ -1710,3 +1887,179 @@ def retry_tenant_setup(request):
             {"detail": f"Une erreur est survenue: {str(e)}"}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+# === CURRENCY AND GEOLOCATION VIEWS ===
+
+@api_view(['POST'])
+@require_http_methods(["POST"])
+def detect_location(request):
+    """
+    Détecte la localisation basée sur l'IP et retourne la configuration de devise suggérée
+    """
+    from .services.geolocation import GeolocationService
+    
+    try:
+        # Obtenir l'IP de la requête
+        ip = request.META.get('HTTP_X_FORWARDED_FOR') or request.META.get('REMOTE_ADDR')
+        
+        # Détecter la localisation
+        location_info = GeolocationService.detect_location_from_ip(ip)
+        
+        if location_info:
+            return Response({
+                "detected_location": location_info,
+                "status": "success"
+            })
+        else:
+            return Response({
+                "detected_location": GeolocationService.get_default_location(),
+                "status": "fallback",
+                "message": "IP detection failed, using default configuration"
+            })
+            
+    except Exception as e:
+        logger.error(f"Erreur lors de la détection de localisation: {str(e)}")
+        return Response({
+            "detected_location": GeolocationService.get_default_location(),
+            "status": "error",
+            "message": f"Error: {str(e)}"
+        })
+
+
+@api_view(['POST'])
+@require_http_methods(["POST"])
+def apply_location_config(request, tenant_id):
+    """
+    Applique automatiquement la configuration détectée au tenant
+    """
+    from .services.geolocation import GeolocationService
+    
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        
+        # Obtenir l'IP de la requête
+        ip = request.META.get('HTTP_X_FORWARDED_FOR') or request.META.get('REMOTE_ADDR')
+        
+        # Détecter et appliquer la configuration
+        location_info = GeolocationService.detect_location_from_ip(ip)
+        if not location_info:
+            location_info = GeolocationService.get_default_location()
+        
+        # Mettre à jour le tenant
+        tenant.country_code = location_info['country_code']
+        tenant.detected_location = location_info
+        tenant.location_detection_date = timezone.now()
+        tenant.save()
+        
+        # Mettre à jour ou créer les paramètres de devise
+        tenant_settings, created = TenantSettings.objects.get_or_create(tenant=tenant)
+        tenant_settings.currency = location_info['currency']
+        tenant_settings.currency_symbol = location_info['currency_symbol']
+        tenant_settings.currency_position = location_info['currency_position']
+        tenant_settings.locale = location_info['locale']
+        tenant_settings.currency_auto_detected = True
+        tenant_settings.currency_detection_date = timezone.now()
+        tenant_settings.save()
+        
+        return Response({
+            "status": "success",
+            "applied_configuration": location_info,
+            "tenant_id": str(tenant_id)
+        })
+        
+    except Tenant.DoesNotExist:
+        return Response(
+            {"detail": "Tenant not found"}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Erreur lors de l'application de la configuration: {str(e)}")
+        return Response(
+            {"detail": f"Error applying configuration: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['GET'])
+@require_http_methods(["GET"])
+def supported_currencies(request):
+    """
+    Retourne la liste des devises supportées
+    """
+    from .services.geolocation import GeolocationService
+    
+    try:
+        currencies = GeolocationService.get_supported_currencies()
+        return Response({
+            "currencies": currencies,
+            "status": "success"
+        })
+        
+    except Exception as e:
+        logger.error(f"Erreur lors de la récupération des devises: {str(e)}")
+        return Response(
+            {"detail": f"Error retrieving currencies: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@require_http_methods(["POST"])
+def update_currency_config(request, tenant_id):
+    """
+    Met à jour manuellement la configuration de devise d'un tenant
+    """
+    try:
+        tenant = Tenant.objects.get(id=tenant_id)
+        currency_code = request.data.get('currency')
+        
+        if not currency_code:
+            return Response(
+                {"detail": "Currency code is required"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Obtenir les informations de la devise depuis le mapping
+        from .services.geolocation import GeolocationService
+        currency_info = None
+        
+        # Chercher la devise dans le mapping
+        for country_code, config in GeolocationService.COUNTRY_CURRENCY_MAP.items():
+            if config['currency'] == currency_code:
+                currency_info = config
+                break
+        
+        if not currency_info:
+            return Response(
+                {"detail": f"Currency {currency_code} not supported"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Mettre à jour les paramètres
+        tenant_settings, created = TenantSettings.objects.get_or_create(tenant=tenant)
+        tenant_settings.currency = currency_info['currency']
+        tenant_settings.currency_symbol = currency_info['currency_symbol']
+        tenant_settings.currency_position = currency_info['currency_position']
+        tenant_settings.locale = currency_info['locale']
+        tenant_settings.currency_auto_detected = False  # Mise à jour manuelle
+        tenant_settings.save()
+        
+        return Response({
+            "status": "success",
+            "updated_configuration": currency_info,
+            "tenant_id": str(tenant_id)
+        })
+        
+    except Tenant.DoesNotExist:
+        return Response(
+            {"detail": "Tenant not found"}, 
+            status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        logger.error(f"Erreur lors de la mise à jour de devise: {str(e)}")
+        return Response(
+            {"detail": f"Error updating currency: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+

@@ -5,7 +5,8 @@ from .views import (
     preview_document_number, increment_document_counter, 
     reset_document_counter, get_document_numbering_config,
     manage_document_numbering_config, tenant_vat_rates, tenant_payment_terms,
-    tenant_setup_progress, retry_tenant_setup
+    tenant_setup_progress, retry_tenant_setup, detect_location, apply_location_config,
+    supported_currencies, update_currency_config
 )
 from .views_document_appearance import (
     tenant_document_appearance, document_appearance_defaults,
@@ -28,6 +29,12 @@ urlpatterns = [
     path('tenants/<uuid:tenant_id>/validate/', validate_tenant, name='validate_tenant'),
     path('tenants/current_tenant_info/', current_tenant_info, name='current_tenant_info'),
     
+    # Endpoints pour la gestion des devises et géolocalisation
+    path('tenants/detect_location/', detect_location, name='detect_location'),
+    path('tenants/<uuid:tenant_id>/apply_location_config/', apply_location_config, name='apply_location_config'),
+    path('tenants/supported_currencies/', supported_currencies, name='supported_currencies'),
+    path('tenants/<uuid:tenant_id>/update_currency_config/', update_currency_config, name='update_currency_config'),
+    
     # Endpoints pour les taux de TVA
     # Corriger le chemin en supprimant le préfixe 'tenants/' redondant
     path('tenants/vat_rates/', tenant_vat_rates, name='tenant_vat_rates'),
@@ -48,6 +55,8 @@ urlpatterns = [
     # Endpoints pour l'apparence des documents
     path('tenants/document_appearance/', tenant_document_appearance, name='tenant_document_appearance'),
     path('document_appearance/', tenant_document_appearance, name='tenant_document_appearance_alt'),
+    # Routes compatibles avec l'API frontend
+    path('tenant-settings/document-appearance/', tenant_document_appearance, name='tenant_settings_document_appearance'),
     path('document_appearance/defaults/', document_appearance_defaults, name='document_appearance_defaults'),
     path('document_appearance/templates/', document_template_choices, name='document_template_choices'),
     path('document_appearance/presets/', document_template_presets, name='document_template_presets'),
